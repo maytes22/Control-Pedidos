@@ -5,7 +5,7 @@ import json
 import re
 from supabase import create_client, Client
 
-st.set_page_config(page_title="Control Universal de Facturas", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦", layout="wide")
 
 # --- CONEXIÓN CON SUPABASE ---
 @st.cache_resource
@@ -182,7 +182,18 @@ def extraer_todas_las_tablas(uploaded_file):
     normalizadas = [r + [""] * (max_c - len(r)) for r in filas_totales]
     return pd.DataFrame(normalizadas)
 
-st.title("📦 Sistema Universal de Facturas y Pistoleo")
+# --- CABECERA PRINCIPAL MODERNA ---
+st.markdown("""
+<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 22px 28px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: space-between;">
+    <div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 32px;">📦</span>
+            <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.5px;">Sistema de Chequeo de Productos</h1>
+        </div>
+        <p style="color: #94a3b8; margin: 4px 0 0 44px; font-size: 13px; font-weight: 400;">Control operativo de inventario, pistoleo y verificación de facturas en tiempo real</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("📂 Facturas Disponibles")
@@ -192,7 +203,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-    # ZONA DE ELIMINACIÓN DE FACTURAS (PRUEBAS O MANTENIMIENTO)
     if factura_activa and factura_activa != "Sin facturas":
         with st.expander("🗑️ Eliminar Factura Actual"):
             st.warning(f"¿Deseas eliminar definitivamente '{factura_activa}' y todos sus productos?")
@@ -328,15 +338,47 @@ if factura_activa and factura_activa != "Sin facturas":
         items_listos = len(df_act[df_act['ESTADO'] == 'Completado'])
         progreso = (tot_registradas / tot_unidades) if tot_unidades > 0 else 0.0
 
-        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
-        c_m1.metric("Factura Activa", factura_activa)
-        c_m2.metric("Ítems Listos", f"{items_listos} / {tot_items}")
-        c_m3.metric("Unidades Registradas", f"{tot_registradas} / {tot_unidades}")
-        c_m4.metric("% Avance Total", f"{progreso * 100:.1f} %")
+        # --- REDISEÑO PROFESIONAL DE TARJETAS DE ESTADÍSTICAS ---
+        c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
+
+        with c_card1:
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #2563eb; border-radius: 10px; padding: 14px 18px; min-height: 98px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Factura Activa</div>
+                <div style="font-size: 17px; font-weight: 700; color: #0f172a; word-break: break-word; line-height: 1.35;" title="{factura_activa}">{factura_activa}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_card2:
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #0891b2; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Ítems Listos</div>
+                <div style="font-size: 26px; font-weight: 800; color: #0891b2; line-height: 1.1;">{items_listos} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_items}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_card3:
+            color_unidades = "#16a34a" if tot_registradas >= tot_unidades else "#d97706"
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_unidades}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Unidades</div>
+                <div style="font-size: 26px; font-weight: 800; color: {color_unidades}; line-height: 1.1;">{tot_registradas} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_unidades}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_card4:
+            color_pct = "#16a34a" if progreso >= 1.0 else "#2563eb"
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_pct}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">% Avance Total</div>
+                <div style="font-size: 26px; font-weight: 800; color: {color_pct}; line-height: 1.1;">{progreso * 100:.1f} %</div>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.progress(min(progreso, 1.0))
         st.divider()
 
+        # FORMULARIO DE BÚSQUEDA
         st.subheader("🔍 Cuadro de Búsqueda y Pistoleo")
         with st.form("form_escaneo_dinamico", clear_on_submit=False):
             c_in, c_btn = st.columns([4, 1])
