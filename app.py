@@ -84,6 +84,15 @@ def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False, rese
     except Exception as e:
         st.error(f"Error al actualizar: {e}")
 
+def eliminar_factura_completa(nombre_factura):
+    try:
+        supabase.table("productos_dinamicos").delete().eq("factura", nombre_factura).execute()
+        supabase.table("facturas").delete().eq("nombre", nombre_factura).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar la factura: {e}")
+        return False
+
 # --- DICCIONARIO Y SEGMENTADOR DE PALABRAS PEGADAS ---
 PALABRAS_CLAVE = {
     "marcador", "marcadores", "permanente", "tablero", "doble", "punta", "fina", "gruesa", "redonda",
@@ -179,9 +188,19 @@ with st.sidebar:
     st.header("📂 Facturas Disponibles")
     facturas_lista = obtener_facturas()
     factura_activa = st.selectbox("Seleccionar Factura a trabajar:", facturas_lista if facturas_lista else ["Sin facturas"])
-    if st.button("🔄 Refrescar datos"):
+    if st.button("🔄 Refrescar datos", use_container_width=True):
         st.rerun()
     st.divider()
+
+    # ZONA DE ELIMINACIÓN DE FACTURAS (PRUEBAS O MANTENIMIENTO)
+    if factura_activa and factura_activa != "Sin facturas":
+        with st.expander("🗑️ Eliminar Factura Actual"):
+            st.warning(f"¿Deseas eliminar definitivamente '{factura_activa}' y todos sus productos?")
+            confirmar = st.checkbox("Confirmar eliminación", key=f"conf_del_{factura_activa}")
+            if st.button("Eliminar Factura de la Base de Datos", type="primary", disabled=not confirmar, use_container_width=True):
+                if eliminar_factura_completa(factura_activa):
+                    st.success(f"Factura '{factura_activa}' eliminada.")
+                    st.rerun()
 
 # SECCIÓN DE SUBIDA DE FACTURAS
 with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factura_activa == "Sin facturas")):
@@ -410,7 +429,6 @@ if factura_activa and factura_activa != "Sin facturas":
                         with c_btns:
                             st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
                             
-                            # Si el artículo ya está completado o tiene unidades registradas, ofrecemos la opción de destachar
                             if prod['CANT. REGISTRADA'] > 0:
                                 b1, b2 = st.columns(2)
                                 with b1:
@@ -422,7 +440,6 @@ if factura_activa and factura_activa != "Sin facturas":
                                         if st.button("➕ Sumar 1", use_container_width=True, disabled=True, key=f"sum_dis_{prod['_id']}_{sufijo_key}"):
                                             pass
                                 with b2:
-                                    # BOTÓN DE DESTACHAR / REVERTIR ERROR
                                     if st.button("↩️ Destachar", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], resetear=True)
                                         st.rerun()
