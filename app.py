@@ -21,6 +21,39 @@ except Exception:
 
 st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦", layout="wide")
 
+# Inyección de estilos CSS para destacar el cuadro de búsqueda
+st.markdown("""
+<style>
+    div[data-testid="stForm"] {
+        background: #f8fafc;
+        border: 2px solid #2563eb;
+        border-radius: 12px;
+        padding: 18px 20px 14px 20px;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+    }
+    div[data-testid="stTextInput"] input {
+        font-size: 18px !important;
+        font-weight: 600 !important;
+        color: #0f172a !important;
+        background-color: #ffffff !important;
+        border: 1.5px solid #94a3b8 !important;
+        border-radius: 8px !important;
+        padding: 10px 14px !important;
+    }
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25) !important;
+    }
+    div[data-testid="stTextInput"] label p {
+        font-size: 13px !important;
+        font-weight: 700 !important;
+        color: #1e293b !important;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- CONEXIÓN CON SUPABASE ---
 @st.cache_resource
 def get_supabase_client() -> Client:
@@ -428,17 +461,26 @@ if factura_activa and factura_activa != "Sin facturas":
                 else:
                     st.warning("⚠️ No se logró detectar un código de barras claro. Intenta acercar o enfocar mejor.")
 
-        st.subheader("🔍 Cuadro de Búsqueda y Pistoleo")
+        # --- ENCABEZADO DESTACADO DEL BUSCADOR ---
+        st.markdown("""
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <span style="font-size: 22px;">⚡</span>
+            <span style="font-size: 19px; font-weight: 800; color: #1e293b; letter-spacing: -0.3px;">Pistoleo y Búsqueda Activa</span>
+        </div>
+        """, unsafe_allow_html=True)
+
         with st.form("form_escaneo_dinamico", clear_on_submit=False):
-            c_in, c_btn = st.columns([4, 1])
+            c_in, c_btn = st.columns([4, 1.2])
             with c_in:
                 query = st.text_input(
-                    "Pistolea código de barra o escribe código/descripción (ej: marcador tablero o lapiz infinito):",
+                    "Pistolea código de barra o escribe nombre/código del producto:",
                     value=st.session_state.get("input_scan_val", ""),
+                    placeholder="Ej. 7426500... o CP VERDE o Marcador...",
                     key="input_scan"
                 ).strip().lower()
             with c_btn:
-                btn_buscar = st.form_submit_button("Buscar / Escanear", use_container_width=True)
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                btn_buscar = st.form_submit_button("🔍 Buscar / Pistolear", type="primary", use_container_width=True)
 
         if query != st.session_state.get("input_scan_val", ""):
             st.session_state["input_scan_val"] = query
@@ -476,7 +518,6 @@ if factura_activa and factura_activa != "Sin facturas":
                         if not nombre_producto:
                             nombre_producto = " | ".join([f"{c}: {prod.get(c, '')}" for c in columnas_orig[:2] if str(prod.get(c, "")).strip()])
 
-                        # CÓDIGO INTERNO O REFERENCIA ADICIONAL SI EXISTE
                         cod_extra = ""
                         for c in columnas_orig:
                             c_low = c.lower()
