@@ -231,15 +231,25 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                     filas_a_insertar = []
                     encabezados_lower = [str(c).lower() for c in nombres_cols]
                     
+                    # Palabras que identifican filas de totales a excluir
+                    PALABRAS_TOTALES = ["totales consolidados", "total consolidado", "totales", "subtotal", "sub total", "gran total", "suma total"]
+
                     for _, r in df_preview_final.iterrows():
                         datos_dict = r.to_dict()
                         valores_limpios = [str(v).strip() for v in datos_dict.values() if v is not None]
                         if not any(valores_limpios):
                             continue
                         
+                        # 1. Descartar si es repetición de encabezado entre páginas
                         if any(str(r[c]).strip().lower() in encabezados_lower for c in nombres_cols[:2]):
                             continue
 
+                        # 2. Descartar si es una fila de totales / consolidado
+                        texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
+                        if any(term in texto_completo_fila for term in PALABRAS_TOTALES):
+                            continue
+
+                        # 3. Validar que tenga código de barra o al menos un código/descripción real
                         cod_barra_val = ""
                         if col_barra_elegida != "(Sin Código de Barra)":
                             cod_barra_val = str(datos_dict.get(col_barra_elegida, "")).strip().replace(" ", "")
@@ -262,7 +272,6 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
 
                     if filas_a_insertar:
                         try:
-                            # 1. Registrar o actualizar factura
                             supabase.table("facturas").upsert({
                                 "nombre": nuevo_nom_factura.strip(),
                                 "columnas_json": nombres_cols,
@@ -270,16 +279,14 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                                 "col_cant": col_cant_elegida
                             }, on_conflict="nombre").execute()
 
-                            # 2. Limpiar productos anteriores si ya existía esa factura
                             supabase.table("productos_dinamicos").delete().eq("factura", nuevo_nom_factura.strip()).execute()
 
-                            # 3. Insertar productos en lotes de 100 para estabilidad
                             batch_size = 100
                             for i in range(0, len(filas_a_insertar), batch_size):
                                 lote = filas_a_insertar[i:i + batch_size]
                                 supabase.table("productos_dinamicos").insert(lote).execute()
 
-                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada en Supabase con {len(filas_a_insertar)} productos!")
+                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada sin filas de totales con {len(filas_a_insertar)} productos reales!")
                             st.session_state.pop("df_raw_pdf", None)
                             st.session_state.pop("raw_pdf_name", None)
                             st.rerun()
