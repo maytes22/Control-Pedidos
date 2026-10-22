@@ -3,7 +3,21 @@ import pandas as pd
 import pdfplumber
 import json
 import re
+from PIL import Image
 from supabase import create_client, Client
+
+# Soporte para decodificador de código de barras desde cámara
+try:
+    import zxingcpp
+    ZXING_AVAILABLE = True
+except ImportError:
+    ZXING_AVAILABLE = False
+
+try:
+    from pyzbar.pyzbar import decode as pyzbar_decode
+    PYZBAR_AVAILABLE = True
+except Exception:
+    PYZBAR_AVAILABLE = False
 
 st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦", layout="wide")
 
@@ -92,6 +106,22 @@ def eliminar_factura_completa(nombre_factura):
     except Exception as e:
         st.error(f"Error al eliminar la factura: {e}")
         return False
+
+# --- FUNCIÓN DECODIFICADORA DE CÓDIGOS DE BARRA DESDE CÁMARA ---
+def decodificar_codigo_imagen(imagen_file):
+    try:
+        img = Image.open(imagen_file)
+        if ZXING_AVAILABLE:
+            resultados = zxingcpp.read_barcodes(img)
+            if resultados:
+                return resultados[0].text.strip()
+        if PYZBAR_AVAILABLE:
+            resultados = pyzbar_decode(img)
+            if resultados:
+                return resultados[0].data.decode("utf-8").strip()
+    except Exception as e:
+        st.error(f"Error al procesar la imagen de la cámara: {e}")
+    return None
 
 # --- DICCIONARIO Y SEGMENTADOR DE PALABRAS PEGADAS ---
 PALABRAS_CLAVE = {
@@ -382,9 +412,21 @@ if factura_activa and factura_activa != "Sin facturas":
         if "input_scan_val" not in st.session_state:
             st.session_state["input_scan_val"] = ""
 
-        # Mensaje temporal de éxito cuando se tacha o actualiza un producto
         if "mensaje_exito" in st.session_state:
             st.success(st.session_state.pop("mensaje_exito"))
+
+        # --- SECCIÓN DE ESCÁNER CON CÁMARA (CELULAR O COMPUTADORA) ---
+        with st.expander("📷 Escanear con Cámara del Celular / Laptop", expanded=False):
+            st.info("💡 Apunta la cámara directamente al código de barras del producto:")
+            foto_captura = st.camera_input("Capturar código de barra", key="cam_scanner_input")
+            if foto_captura is not None:
+                codigo_leido = decodificar_codigo_imagen(foto_captura)
+                if codigo_leido:
+                    st.session_state["input_scan_val"] = codigo_leido
+                    st.success(f"🎯 Código de barra detectado: `{codigo_leido}`")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ No se logró detectar un código de barras claro. Intenta acercar o enfocar mejor.")
 
         st.subheader("🔍 Cuadro de Búsqueda y Pistoleo")
         with st.form("form_escaneo_dinamico", clear_on_submit=False):
@@ -398,7 +440,6 @@ if factura_activa and factura_activa != "Sin facturas":
             with c_btn:
                 btn_buscar = st.form_submit_button("Buscar / Escanear", use_container_width=True)
 
-        # Si el usuario escribió y envió el formulario manualmente, guardamos el valor en session_state
         if query != st.session_state.get("input_scan_val", ""):
             st.session_state["input_scan_val"] = query
 
@@ -486,7 +527,6 @@ if factura_activa and factura_activa != "Sin facturas":
                         with c_btns:
                             st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
                             
-                            # Obtener una descripción corta para el mensaje de confirmación
                             desc_corta = ""
                             for c in columnas_orig:
                                 if any(w in c.lower() for w in ["desc", "prod", "articulo", "detalle"]):
@@ -499,7 +539,6 @@ if factura_activa and factura_activa != "Sin facturas":
                                     if prod['ESTADO'] != 'Completado':
                                         if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
                                             actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
-                                            # Si al sumar se completó, limpiamos el buscador
                                             if (prod['CANT. REGISTRADA'] + 1) >= prod['_cant_total']:
                                                 st.session_state["input_scan_val"] = ""
                                                 st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
@@ -516,13 +555,11 @@ if factura_activa and factura_activa != "Sin facturas":
                                 with b1:
                                     if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
-                                        # Si sólo requería 1 unidad, queda completado: limpiamos buscador
                                         if prod['_cant_total'] <= 1:
                                             st.session_state["input_scan_val"] = ""
                                             st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
                                         st.rerun()
                                 with b2:
-                                    # BOTÓN TACHAR: ACTUALIZA, LIMPIA EL BUSCADOR Y QUEDA EN BLANCO
                                     if st.button("✔️ Tachar / Todo", type="primary", use_container_width=True, key=f"tach_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], completar=True)
                                         st.session_state["input_scan_val"] = ""
