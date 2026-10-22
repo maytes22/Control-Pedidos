@@ -464,6 +464,36 @@ if factura_activa and factura_activa != "Sin facturas":
             if encontrados:
                 def render_tarjeta_producto(prod, sufijo_key=""):
                     with st.container(border=True):
+                        # 1. Obtener la descripción principal del producto
+                        nombre_producto = ""
+                        for c in columnas_orig:
+                            c_low = c.lower()
+                            if any(w in c_low for w in ["desc", "articulo", "detalle", "producto"]):
+                                val = str(prod.get(c, "")).strip()
+                                if val:
+                                    nombre_producto = val
+                                    break
+                        if not nombre_producto:
+                            nombre_producto = " | ".join([f"{c}: {prod.get(c, '')}" for c in columnas_orig[:2] if str(prod.get(c, "")).strip()])
+
+                        # CÓDIGO INTERNO O REFERENCIA ADICIONAL SI EXISTE
+                        cod_extra = ""
+                        for c in columnas_orig:
+                            c_low = c.lower()
+                            if ("cod" in c_low or "item" in c_low or "ref" in c_low) and "barra" not in c_low:
+                                val = str(prod.get(c, "")).strip()
+                                if val:
+                                    cod_extra = f"<span style='background: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-right: 8px;'>CÓD: {val}</span>"
+                                    break
+
+                        # ENCABEZADO DESTACADO CON NOMBRE EN GRANDE
+                        st.markdown(f"""
+                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">DESCRIPCIÓN DEL ARTÍCULO:</div>
+                            <div style="font-size: 20px; font-weight: 800; color: #0f172a; line-height: 1.3;">{cod_extra}{nombre_producto}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
                         val_precio_compra = "-"
                         val_total = "-"
                         for c in columnas_orig:
@@ -527,11 +557,7 @@ if factura_activa and factura_activa != "Sin facturas":
                         with c_btns:
                             st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
                             
-                            desc_corta = ""
-                            for c in columnas_orig:
-                                if any(w in c.lower() for w in ["desc", "prod", "articulo", "detalle"]):
-                                    desc_corta = str(prod.get(c, ""))[:35]
-                                    break
+                            desc_corta = nombre_producto[:35]
 
                             if prod['CANT. REGISTRADA'] > 0:
                                 b1, b2 = st.columns(2)
