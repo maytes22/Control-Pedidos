@@ -338,7 +338,7 @@ if factura_activa and factura_activa != "Sin facturas":
         items_listos = len(df_act[df_act['ESTADO'] == 'Completado'])
         progreso = (tot_registradas / tot_unidades) if tot_unidades > 0 else 0.0
 
-        # --- REDISEÑO PROFESIONAL DE TARJETAS DE ESTADÍSTICAS ---
+        # --- TARJETAS KPI REDISEÑADAS ---
         c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
 
         with c_card1:
@@ -378,14 +378,29 @@ if factura_activa and factura_activa != "Sin facturas":
         st.progress(min(progreso, 1.0))
         st.divider()
 
-        # FORMULARIO DE BÚSQUEDA
+        # FORMULARIO DE BÚSQUEDA CON CONTROL DE RESET
+        if "input_scan_val" not in st.session_state:
+            st.session_state["input_scan_val"] = ""
+
+        # Mensaje temporal de éxito cuando se tacha o actualiza un producto
+        if "mensaje_exito" in st.session_state:
+            st.success(st.session_state.pop("mensaje_exito"))
+
         st.subheader("🔍 Cuadro de Búsqueda y Pistoleo")
         with st.form("form_escaneo_dinamico", clear_on_submit=False):
             c_in, c_btn = st.columns([4, 1])
             with c_in:
-                query = st.text_input("Pistolea código de barra o escribe código/descripción (ej: marcador tablero o lapiz infinito):", key="input_scan").strip().lower()
+                query = st.text_input(
+                    "Pistolea código de barra o escribe código/descripción (ej: marcador tablero o lapiz infinito):",
+                    value=st.session_state.get("input_scan_val", ""),
+                    key="input_scan"
+                ).strip().lower()
             with c_btn:
                 btn_buscar = st.form_submit_button("Buscar / Escanear", use_container_width=True)
+
+        # Si el usuario escribió y envió el formulario manualmente, guardamos el valor en session_state
+        if query != st.session_state.get("input_scan_val", ""):
+            st.session_state["input_scan_val"] = query
 
         if query:
             query_limpio = query.replace(" ", "").replace("-", "").replace("_", "")
@@ -471,18 +486,29 @@ if factura_activa and factura_activa != "Sin facturas":
                         with c_btns:
                             st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
                             
+                            # Obtener una descripción corta para el mensaje de confirmación
+                            desc_corta = ""
+                            for c in columnas_orig:
+                                if any(w in c.lower() for w in ["desc", "prod", "articulo", "detalle"]):
+                                    desc_corta = str(prod.get(c, ""))[:35]
+                                    break
+
                             if prod['CANT. REGISTRADA'] > 0:
                                 b1, b2 = st.columns(2)
                                 with b1:
                                     if prod['ESTADO'] != 'Completado':
                                         if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
                                             actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
+                                            # Si al sumar se completó, limpiamos el buscador
+                                            if (prod['CANT. REGISTRADA'] + 1) >= prod['_cant_total']:
+                                                st.session_state["input_scan_val"] = ""
+                                                st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
                                             st.rerun()
                                     else:
                                         if st.button("➕ Sumar 1", use_container_width=True, disabled=True, key=f"sum_dis_{prod['_id']}_{sufijo_key}"):
                                             pass
                                 with b2:
-                                    if st.button("↩️ Destachar", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
+                                    if st.button("↩️ Destachar", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], resetear=True)
                                         st.rerun()
                             else:
@@ -490,10 +516,17 @@ if factura_activa and factura_activa != "Sin facturas":
                                 with b1:
                                     if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
+                                        # Si sólo requería 1 unidad, queda completado: limpiamos buscador
+                                        if prod['_cant_total'] <= 1:
+                                            st.session_state["input_scan_val"] = ""
+                                            st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
                                         st.rerun()
                                 with b2:
+                                    # BOTÓN TACHAR: ACTUALIZA, LIMPIA EL BUSCADOR Y QUEDA EN BLANCO
                                     if st.button("✔️ Tachar / Todo", type="primary", use_container_width=True, key=f"tach_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], completar=True)
+                                        st.session_state["input_scan_val"] = ""
+                                        st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente. Listo para pistolear el siguiente."
                                         st.rerun()
 
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
