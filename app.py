@@ -1,92 +1,80 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-import sqlite3
 import json
 import re
-import os
+from supabase import create_client, Client
 
 st.set_page_config(page_title="Control Universal de Facturas", page_icon="📦", layout="wide")
 
-DB_FILE = "pedidos.db"
+# --- CONEXIÓN CON SUPABASE ---
+@st.cache_resource
+def get_supabase_client() -> Client:
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error("⚠️ Faltan las credenciales de Supabase en Secrets (SUPABASE_URL y SUPABASE_KEY).")
+        st.stop()
 
-# --- BASE DE DATOS FLEXIBLE ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS facturas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT UNIQUE,
-            columnas_json TEXT,
-            col_barra TEXT,
-            col_cant TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS productos_dinamicos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            factura TEXT,
-            datos_json TEXT,
-            codigo_barra TEXT,
-            cant_total INTEGER,
-            cant_registrada INTEGER DEFAULT 0,
-            estado TEXT DEFAULT 'Pendiente'
-        )
-    """)
-    conn.commit()
-    conn.close()
+supabase = get_supabase_client()
 
+# --- FUNCIONES DE BASE DE DATOS (NUBE SUPABASE) ---
 def obtener_facturas():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT nombre FROM facturas ORDER BY id DESC")
-    facturas = [row[0] for row in c.fetchall()]
-    conn.close()
-    return facturas
+    try:
+        res = supabase.table("facturas").select("nombre").order("id", desc=True).execute()
+        return [row["nombre"] for row in res.data]
+    except Exception:
+        return []
 
 def obtener_info_factura(nombre_factura):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT columnas_json, col_barra, col_cant FROM facturas WHERE nombre = ?", (nombre_factura,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return json.loads(row[0]), row[1], row[2]
+    try:
+        res = supabase.table("facturas").select("columnas_json, col_barra, col_cant").eq("nombre", nombre_factura).execute()
+        if res.data:
+            row = res.data[0]
+            cols = row["columnas_json"]
+            if isinstance(cols, str):
+                cols = json.loads(cols)
+            return cols, row.get("col_barra", ""), row.get("col_cant", "")
+    except Exception:
+        pass
     return [], "", ""
 
 def cargar_productos_factura(nombre_factura):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, datos_json, codigo_barra, cant_total, cant_registrada, estado FROM productos_dinamicos WHERE factura = ?", (nombre_factura,))
-    rows = c.fetchall()
-    conn.close()
-    
-    lista = []
-    for r in rows:
-        item = json.loads(r[1])
-        item['_id'] = r[0]
-        item['_codigo_barra'] = r[2]
-        item['_cant_total'] = r[3]
-        item['CANT. REGISTRADA'] = r[4]
-        item['ESTADO'] = r[5]
-        lista.append(item)
-    return pd.DataFrame(lista)
+    try:
+        res = supabase.table("productos_dinamicos").select("id, datos_json, codigo_barra, cant_total, cant_registrada, estado").eq("factura", nombre_factura).order("id").execute()
+        lista = []
+        for r in res.data:
+            item = r["datos_json"]
+            if isinstance(item, str):
+                item = json.loads(item)
+            item['_id'] = r["id"]
+            item['_codigo_barra'] = r.get("codigo_barra", "")
+            item['_cant_total'] = r.get("cant_total", 0)
+            item['CANT. REGISTRADA'] = r.get("cant_registrada", 0)
+            item['ESTADO'] = r.get("estado", "Pendiente")
+            lista.append(item)
+        return pd.DataFrame(lista)
+    except Exception:
+        return pd.DataFrame()
 
 def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT cant_total, cant_registrada FROM productos_dinamicos WHERE id = ?", (prod_id,))
-    row = c.fetchone()
-    if row:
-        cant_total, cant_reg = row[0], row[1]
-        nueva_cant = cant_total if completar else cant_reg + (cant_sumar or 1)
-        estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
-        c.execute("UPDATE productos_dinamicos SET cant_registrada = ?, estado = ? WHERE id = ?", (nueva_cant, estado, prod_id))
-        conn.commit()
-    conn.close()
-
-init_db()
+    try:
+        res = supabase.table("productos_dinamicos").select("cant_total, cant_registrada").eq("id", prod_id).execute()
+        if res.data:
+            row = res.data[0]
+            cant_total = row["cant_total"]
+            cant_reg = row["cant_registrada"]
+            nueva_cant = cant_total if completar else cant_reg + (cant_sumar or 1)
+            nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
+            
+            supabase.table("productos_dinamicos").update({
+                "cant_registrada": nueva_cant,
+                "estado": nuevo_estado
+            }).eq("id", prod_id).execute()
+    except Exception as e:
+        st.error(f"Error al actualizar: {e}")
 
 # --- DICCIONARIO Y SEGMENTADOR DE PALABRAS PEGADAS ---
 PALABRAS_CLAVE = {
@@ -114,20 +102,15 @@ def reparar_espacios_texto(texto):
     t = str(texto).strip().replace("\r", " ").replace("\n", " ")
     t = re.sub(r"\s+", " ", t)
 
-    # 1. Separar CamelCase (minúscula seguida de mayúscula: "tableroAzul" -> "tablero Azul")
     t = re.sub(r"([a-zñáéíóú])([A-ZÑÁÉÍÓÚ])", r"\1 \2", t)
-    # 2. Separar dígitos pegados a letras ("160pag" -> "160 pag", "230gr" -> "230 gr", "CartaC48" -> "Carta C 48")
     t = re.sub(r"(\d+)([a-zA-ZñáéíóúÑÁÉÍÓÚ])", r"\1 \2", t)
     t = re.sub(r"([a-zA-ZñáéíóúÑÁÉÍÓÚ])(\d+)", r"\1 \2", t)
-    # 3. Separar diagonales ("C48/96" -> "C 48 / 96")
     t = re.sub(r"([a-zA-Z0-9])(/)", r"\1 /", t)
     t = re.sub(r"(/)([a-zA-Z0-9])", r"/ \2", t)
 
-    # 4. Si aún hay bloques largos sin espacios (ej: "Marcadordetableroazul"):
     tokens = t.split()
     tokens_corregidos = []
     for tok in tokens:
-        # Si la palabra mide más de 7 caracteres y está en minúsculas/mezcla sin símbolos web
         if len(tok) >= 7 and not tok.startswith("http") and not ("/" in tok or "-" in tok and tok.count("-") > 1):
             tok_low = tok.lower()
             idx = 0
@@ -152,11 +135,8 @@ def reparar_espacios_texto(texto):
 
     return re.sub(r"\s+", " ", " ".join(tokens_corregidos)).strip()
 
-# --- EXTRACCIÓN DE TABLAS ROBUSTA ---
 def extraer_todas_las_tablas(uploaded_file):
     filas_totales = []
-    
-    # Tolerancia horizontal x_tolerance=1 para forzar que cualquier corte sea detectado
     table_settings = {
         "text_x_tolerance": 1,
         "text_y_tolerance": 2,
@@ -191,13 +171,15 @@ with st.sidebar:
     st.header("📂 Facturas Disponibles")
     facturas_lista = obtener_facturas()
     factura_activa = st.selectbox("Seleccionar Factura a trabajar:", facturas_lista if facturas_lista else ["Sin facturas"])
+    if st.button("🔄 Refrescar datos"):
+        st.rerun()
     st.divider()
 
 # SECCIÓN DE SUBIDA DE FACTURAS
 with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factura_activa == "Sin facturas")):
     c_nom, c_file = st.columns([1, 2])
     with c_nom:
-        nuevo_nom_factura = st.text_input("Nombre o N° de Factura:", placeholder="Ej. Factura_Pointer_01")
+        nuevo_nom_factura = st.text_input("Nombre o N° de Factura:", placeholder="Ej. Factura_01")
     with c_file:
         archivo_pdf = st.file_uploader("Cargar PDF del proveedor:", type=["pdf"], key="nuevo_pdf")
 
@@ -239,10 +221,10 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
 
             df_preview_final = df_raw.iloc[fila_encabezados:].copy()
             df_preview_final.columns = nombres_cols
-            st.write("**Vista previa de los primeros productos con espacios corregidos:**")
+            st.write("**Vista previa de los primeros productos:**")
             st.dataframe(df_preview_final.head(6), use_container_width=True)
 
-            if st.button("🚀 Guardar Todos los Campos de esta Factura", type="primary"):
+            if st.button("🚀 Guardar en la Nube (Supabase)", type="primary"):
                 if not nuevo_nom_factura.strip():
                     st.error("Asigna un nombre a la factura.")
                 else:
@@ -251,7 +233,6 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                     
                     for _, r in df_preview_final.iterrows():
                         datos_dict = r.to_dict()
-                        
                         valores_limpios = [str(v).strip() for v in datos_dict.values() if v is not None]
                         if not any(valores_limpios):
                             continue
@@ -270,35 +251,40 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                         except Exception:
                             cant_val = 1
                         
-                        filas_a_insertar.append((
-                            nuevo_nom_factura.strip(),
-                            json.dumps(datos_dict, ensure_ascii=False),
-                            cod_barra_val,
-                            cant_val,
-                            0,
-                            'Pendiente'
-                        ))
+                        filas_a_insertar.append({
+                            "factura": nuevo_nom_factura.strip(),
+                            "datos_json": datos_dict,
+                            "codigo_barra": cod_barra_val,
+                            "cant_total": cant_val,
+                            "cant_registrada": 0,
+                            "estado": "Pendiente"
+                        })
 
                     if filas_a_insertar:
-                        conn = sqlite3.connect(DB_FILE)
-                        c = conn.cursor()
-                        c.execute("""
-                            INSERT OR REPLACE INTO facturas (nombre, columnas_json, col_barra, col_cant)
-                            VALUES (?, ?, ?, ?)
-                        """, (nuevo_nom_factura.strip(), json.dumps(nombres_cols, ensure_ascii=False), col_barra_elegida, col_cant_elegida))
-                        
-                        c.execute("DELETE FROM productos_dinamicos WHERE factura = ?", (nuevo_nom_factura.strip(),))
-                        c.executemany("""
-                            INSERT INTO productos_dinamicos (factura, datos_json, codigo_barra, cant_total, cant_registrada, estado)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, filas_a_insertar)
-                        conn.commit()
-                        conn.close()
+                        try:
+                            # 1. Registrar o actualizar factura
+                            supabase.table("facturas").upsert({
+                                "nombre": nuevo_nom_factura.strip(),
+                                "columnas_json": nombres_cols,
+                                "col_barra": col_barra_elegida,
+                                "col_cant": col_cant_elegida
+                            }, on_conflict="nombre").execute()
 
-                        st.success(f"¡Factura '{nuevo_nom_factura}' guardada exitosamente con {len(filas_a_insertar)} productos!")
-                        st.session_state.pop("df_raw_pdf", None)
-                        st.session_state.pop("raw_pdf_name", None)
-                        st.rerun()
+                            # 2. Limpiar productos anteriores si ya existía esa factura
+                            supabase.table("productos_dinamicos").delete().eq("factura", nuevo_nom_factura.strip()).execute()
+
+                            # 3. Insertar productos en lotes de 100 para estabilidad
+                            batch_size = 100
+                            for i in range(0, len(filas_a_insertar), batch_size):
+                                lote = filas_a_insertar[i:i + batch_size]
+                                supabase.table("productos_dinamicos").insert(lote).execute()
+
+                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada en Supabase con {len(filas_a_insertar)} productos!")
+                            st.session_state.pop("df_raw_pdf", None)
+                            st.session_state.pop("raw_pdf_name", None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar en Supabase: {e}")
 
 # --- ÁREA OPERATIVA DE PISTOLEO Y BÚSQUEDA ---
 if factura_activa and factura_activa != "Sin facturas":
@@ -321,7 +307,6 @@ if factura_activa and factura_activa != "Sin facturas":
         st.progress(min(progreso, 1.0))
         st.divider()
 
-        # FORMULARIO DE BÚSQUEDA
         st.subheader("🔍 Cuadro de Búsqueda y Pistoleo")
         with st.form("form_escaneo_dinamico", clear_on_submit=False):
             c_in, c_btn = st.columns([4, 1])
@@ -362,7 +347,6 @@ if factura_activa and factura_activa != "Sin facturas":
                                 if str(prod.get(c, "")).strip():
                                     val_total = str(prod.get(c, "")).strip()
 
-                        # BLOQUES SUPERIORES
                         c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.1, 1.1, 1.2, 1.2, 1.4, 1.8])
                         
                         with c_cant:
@@ -426,7 +410,6 @@ if factura_activa and factura_activa != "Sin facturas":
 
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
-                        # DATOS COMPLETOS
                         st.markdown("##### 📑 Datos completos del artículo en la factura:")
                         cols_por_fila = 4
                         grid_cols = st.columns(cols_por_fila)
