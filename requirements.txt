@@ -3,3 +3,5 @@ pandas
 pdfplumber
 openpyxl
 supabase
+zxing-cpp
+Pillow
