@@ -59,15 +59,23 @@ def cargar_productos_factura(nombre_factura):
     except Exception:
         return pd.DataFrame()
 
-def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False):
+def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False, resetear=False):
     try:
         res = supabase.table("productos_dinamicos").select("cant_total, cant_registrada").eq("id", prod_id).execute()
         if res.data:
             row = res.data[0]
             cant_total = row["cant_total"]
             cant_reg = row["cant_registrada"]
-            nueva_cant = cant_total if completar else cant_reg + (cant_sumar or 1)
-            nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
+            
+            if resetear:
+                nueva_cant = 0
+                nuevo_estado = "Pendiente"
+            elif completar:
+                nueva_cant = cant_total
+                nuevo_estado = "Completado"
+            else:
+                nueva_cant = cant_reg + (cant_sumar or 1)
+                nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
             
             supabase.table("productos_dinamicos").update({
                 "cant_registrada": nueva_cant,
@@ -231,7 +239,6 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                     filas_a_insertar = []
                     encabezados_lower = [str(c).lower() for c in nombres_cols]
                     
-                    # Palabras que identifican filas de totales a excluir
                     PALABRAS_TOTALES = ["totales consolidados", "total consolidado", "totales", "subtotal", "sub total", "gran total", "suma total"]
 
                     for _, r in df_preview_final.iterrows():
@@ -240,16 +247,13 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                         if not any(valores_limpios):
                             continue
                         
-                        # 1. Descartar si es repetición de encabezado entre páginas
                         if any(str(r[c]).strip().lower() in encabezados_lower for c in nombres_cols[:2]):
                             continue
 
-                        # 2. Descartar si es una fila de totales / consolidado
                         texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
                         if any(term in texto_completo_fila for term in PALABRAS_TOTALES):
                             continue
 
-                        # 3. Validar que tenga código de barra o al menos un código/descripción real
                         cod_barra_val = ""
                         if col_barra_elegida != "(Sin Código de Barra)":
                             cod_barra_val = str(datos_dict.get(col_barra_elegida, "")).strip().replace(" ", "")
@@ -286,7 +290,7 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                                 lote = filas_a_insertar[i:i + batch_size]
                                 supabase.table("productos_dinamicos").insert(lote).execute()
 
-                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada sin filas de totales con {len(filas_a_insertar)} productos reales!")
+                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada sin filas de totales con {len(filas_a_insertar)} productos!")
                             st.session_state.pop("df_raw_pdf", None)
                             st.session_state.pop("raw_pdf_name", None)
                             st.rerun()
@@ -354,7 +358,7 @@ if factura_activa and factura_activa != "Sin facturas":
                                 if str(prod.get(c, "")).strip():
                                     val_total = str(prod.get(c, "")).strip()
 
-                        c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.1, 1.1, 1.2, 1.2, 1.4, 1.8])
+                        c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.0])
                         
                         with c_cant:
                             st.markdown(
@@ -366,7 +370,7 @@ if factura_activa and factura_activa != "Sin facturas":
                             )
                         
                         with c_reg:
-                            col_r = "#1e8e3e" if prod['CANT. REGISTRADA'] >= prod['_cant_total'] else "#d93025"
+                            col_r = "#1e8e3e" if prod['CANT. REGISTRADA'] >= prod['_cant_total'] else ("#d97706" if prod['CANT. REGISTRADA'] > 0 else "#5f6368")
                             st.markdown(
                                 f"<div style='background-color: #f1f3f4; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid {col_r};'>"
                                 f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>YA REGISTRADAS</span><br>"
@@ -405,15 +409,33 @@ if factura_activa and factura_activa != "Sin facturas":
 
                         with c_btns:
                             st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
-                            b1, b2 = st.columns(2)
-                            with b1:
-                                if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
-                                    actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
-                                    st.rerun()
-                            with b2:
-                                if st.button("✔️ Tachar / Todo", type="primary", use_container_width=True, key=f"tach_{prod['_id']}_{sufijo_key}"):
-                                    actualizar_producto_dinamico(prod['_id'], completar=True)
-                                    st.rerun()
+                            
+                            # Si el artículo ya está completado o tiene unidades registradas, ofrecemos la opción de destachar
+                            if prod['CANT. REGISTRADA'] > 0:
+                                b1, b2 = st.columns(2)
+                                with b1:
+                                    if prod['ESTADO'] != 'Completado':
+                                        if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
+                                            actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
+                                            st.rerun()
+                                    else:
+                                        if st.button("➕ Sumar 1", use_container_width=True, disabled=True, key=f"sum_dis_{prod['_id']}_{sufijo_key}"):
+                                            pass
+                                with b2:
+                                    # BOTÓN DE DESTACHAR / REVERTIR ERROR
+                                    if st.button("↩️ Destachar", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], resetear=True)
+                                        st.rerun()
+                            else:
+                                b1, b2 = st.columns(2)
+                                with b1:
+                                    if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
+                                        st.rerun()
+                                with b2:
+                                    if st.button("✔️ Tachar / Todo", type="primary", use_container_width=True, key=f"tach_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], completar=True)
+                                        st.rerun()
 
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
