@@ -6,7 +6,6 @@ import re
 from PIL import Image
 from supabase import create_client, Client
 
-# Soporte para decodificador de código de barras desde cámara
 try:
     import zxingcpp
     ZXING_AVAILABLE = True
@@ -21,7 +20,6 @@ except Exception:
 
 st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦", layout="wide")
 
-# Inyección de estilos CSS para destacar el cuadro de búsqueda
 st.markdown("""
 <style>
     div[data-testid="stForm"] {
@@ -121,7 +119,7 @@ def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False, rese
                 nueva_cant = cant_total
                 nuevo_estado = "Completado"
             else:
-                nueva_cant = cant_reg + (cant_sumar or 1)
+                nueva_cant = cant_reg + (cant_sumar if cant_sumar is not None else 1)
                 nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
             
             supabase.table("productos_dinamicos").update({
@@ -546,7 +544,9 @@ if factura_activa and factura_activa != "Sin facturas":
                                 if str(prod.get(c, "")).strip():
                                     val_total = str(prod.get(c, "")).strip()
 
-                        c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.0])
+                        faltan_uds = max(0, prod['_cant_total'] - prod['CANT. REGISTRADA'])
+
+                        c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.5])
                         
                         with c_cant:
                             st.markdown(
@@ -590,48 +590,56 @@ if factura_activa and factura_activa != "Sin facturas":
                             if prod['ESTADO'] == 'Completado':
                                 st.success("✅ COMPLETADO / TACHADO")
                             elif prod['ESTADO'] == 'En Proceso':
-                                faltan = prod['_cant_total'] - prod['CANT. REGISTRADA']
-                                st.warning(f"⏳ EN PROCESO ({faltan} rest.)")
+                                st.warning(f"⏳ EN PROCESO ({faltan_uds} rest.)")
                             else:
                                 st.info("⚪ PENDIENTE")
 
                         with c_btns:
-                            st.markdown("<p style='font-weight: 600; margin-bottom: 3px; font-size: 13px;'>Acciones Rápidas:</p>", unsafe_allow_html=True)
+                            st.markdown("<p style='font-weight: 700; margin-bottom: 3px; font-size: 12px; color: #334155;'>⚡ Conteo Rápido / Registro:</p>", unsafe_allow_html=True)
                             
                             desc_corta = nombre_producto[:35]
 
-                            if prod['CANT. REGISTRADA'] > 0:
-                                b1, b2 = st.columns(2)
-                                with b1:
-                                    if prod['ESTADO'] != 'Completado':
-                                        if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
-                                            actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
-                                            if (prod['CANT. REGISTRADA'] + 1) >= prod['_cant_total']:
-                                                st.session_state["input_scan_val"] = ""
-                                                st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
-                                            st.rerun()
-                                    else:
-                                        if st.button("➕ Sumar 1", use_container_width=True, disabled=True, key=f"sum_dis_{prod['_id']}_{sufijo_key}"):
-                                            pass
-                                with b2:
-                                    if st.button("↩️ Destachar", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
-                                        actualizar_producto_dinamico(prod['_id'], resetear=True)
-                                        st.rerun()
-                            else:
-                                b1, b2 = st.columns(2)
-                                with b1:
-                                    if st.button("➕ Sumar 1", use_container_width=True, key=f"sum_{prod['_id']}_{sufijo_key}"):
-                                        actualizar_producto_dinamico(prod['_id'], cant_sumar=1)
-                                        if prod['_cant_total'] <= 1:
+                            # Si el artículo aún tiene unidades pendientes de contar
+                            if faltan_uds > 0:
+                                col_input_cant, col_btn_add, col_btn_tach = st.columns([1.1, 1.2, 1.4])
+                                
+                                with col_input_cant:
+                                    # Campo numérico rápido: por defecto sugiere lo que falta (o 1)
+                                    val_sugerido = faltan_uds if faltan_uds <= 12 else 1
+                                    cant_a_sumar = st.number_input(
+                                        "Contar",
+                                        min_value=1,
+                                        max_value=max(1, faltan_uds),
+                                        value=val_sugerido,
+                                        step=1,
+                                        key=f"num_{prod['_id']}_{sufijo_key}",
+                                        label_visibility="collapsed"
+                                    )
+                                with col_btn_add:
+                                    if st.button(f"➕ Sumar {cant_a_sumar}", use_container_width=True, key=f"btn_add_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], cant_sumar=int(cant_a_sumar))
+                                        if (prod['CANT. REGISTRADA'] + int(cant_a_sumar)) >= prod['_cant_total']:
                                             st.session_state["input_scan_val"] = ""
                                             st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
                                         st.rerun()
-                                with b2:
-                                    if st.button("✔️ Tachar / Todo", type="primary", use_container_width=True, key=f"tach_{prod['_id']}_{sufijo_key}"):
+                                with col_btn_tach:
+                                    if st.button("✔️ Tachar Todo", type="primary", use_container_width=True, help=f"Registra directamente las {faltan_uds} unidades restantes", key=f"tach_{prod['_id']}_{sufijo_key}"):
                                         actualizar_producto_dinamico(prod['_id'], completar=True)
                                         st.session_state["input_scan_val"] = ""
-                                        st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente. Listo para pistolear el siguiente."
+                                        st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente ({prod['_cant_total']} unidades)."
                                         st.rerun()
+                            else:
+                                # Ya está completado: mostrar directamente la opción de revertir / destachar
+                                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                                if st.button("↩️ Destachar / Corregir", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
+                                    actualizar_producto_dinamico(prod['_id'], resetear=True)
+                                    st.rerun()
+
+                            # Si está en proceso (con más de 0 pero menos del total), damos también acceso a reiniciar si contó mal
+                            if 0 < prod['CANT. REGISTRADA'] < prod['_cant_total']:
+                                if st.button("↩️ Reiniciar a 0 este conteo", type="secondary", use_container_width=True, key=f"dest_parcial_{prod['_id']}_{sufijo_key}"):
+                                    actualizar_producto_dinamico(prod['_id'], resetear=True)
+                                    st.rerun()
 
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
