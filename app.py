@@ -243,6 +243,23 @@ def extraer_todas_las_tablas(uploaded_file):
     normalizadas = [r + [""] * (max_c - len(r)) for r in filas_totales]
     return pd.DataFrame(normalizadas)
 
+# --- DETECTOR AUTOMÁTICO DE FILA DE ENCABEZADOS REALES ---
+def auto_detectar_fila_encabezados(df):
+    keywords = ["codigo", "código", "sku", "descripcion", "descripción", "articulo", "artículo", "cantidad", "cant", "precio", "total", "barra", "ean"]
+    mejor_fila = 1
+    max_coincidencias = 0
+    limite = min(len(df), 20)
+    for i in range(limite):
+        fila_texto = " ".join([str(val).lower() for val in df.iloc[i]])
+        # Ignorar si es una fila de resumen superior ("total productos", "total unidades", "cotizaciones")
+        if any(term in fila_texto for term in ["total productos", "total unidades", "cotizaciones", "regla de calculo"]):
+            continue
+        coincidencias = sum(1 for kw in keywords if kw in fila_texto)
+        if coincidencias > max_coincidencias:
+            max_coincidencias = coincidencias
+            mejor_fila = i + 1
+    return mejor_fila
+
 # --- CABECERA PRINCIPAL MODERNA ---
 st.markdown("""
 <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 22px 28px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: space-between;">
@@ -290,7 +307,17 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
 
         if df_raw is not None and not df_raw.empty:
             st.subheader("Configuración de columnas de esta factura")
-            fila_encabezados = st.number_input("Fila donde están los nombres de las columnas (Encabezados):", min_value=1, max_value=len(df_raw), value=1, step=1)
+            
+            # Detectar automáticamente la fila real de encabezados
+            fila_sugerida = auto_detectar_fila_encabezados(df_raw)
+            fila_encabezados = st.number_input(
+                "Fila donde están los nombres de las columnas (Encabezados reales de productos):",
+                min_value=1,
+                max_value=len(df_raw),
+                value=fila_sugerida,
+                step=1,
+                help="El sistema autodetectó la fila donde empiezan los títulos reales (ej: CÓDIGO, SKU, DESCRIPCIÓN, CANTIDAD)."
+            )
             
             nombres_cols = []
             for idx, col_val in enumerate(df_raw.iloc[fila_encabezados - 1]):
@@ -319,7 +346,7 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
 
             df_preview_final = df_raw.iloc[fila_encabezados:].copy()
             df_preview_final.columns = nombres_cols
-            st.write("**Vista previa de los primeros productos:**")
+            st.write("**Vista previa de los primeros productos detectados:**")
             st.dataframe(df_preview_final.head(6), use_container_width=True)
 
             if st.button("🚀 Guardar en la Nube (Supabase)", type="primary"):
@@ -327,9 +354,15 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                     st.error("Asigna un nombre a la factura.")
                 else:
                     filas_a_insertar = []
-                    encabezados_lower = [str(c).lower() for c in nombres_cols]
+                    encabezados_lower = [str(c).lower().strip() for c in nombres_cols]
                     
-                    PALABRAS_TOTALES = ["totales consolidados", "total consolidado", "totales", "subtotal", "sub total", "gran total", "suma total"]
+                    # Palabras que identifican membretes, totales o separadores de cotización a descartar
+                    PALABRAS_DESCARTAR = [
+                        "totales consolidados", "total consolidado", "totales", "subtotal", "sub total",
+                        "gran total", "suma total", "cotizacion", "cotización", "cotizaciones",
+                        "total productos", "total unidades", "piezas", "folios", "folio",
+                        "regla de calculo", "regla de cálculo"
+                    ]
 
                     for _, r in df_preview_final.iterrows():
                         datos_dict = r.to_dict()
@@ -337,24 +370,38 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                         if not any(valores_limpios):
                             continue
                         
-                        if any(str(r[c]).strip().lower() in encabezados_lower for c in nombres_cols[:2]):
+                        texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
+
+                        # 1. Descartar si es repetición de encabezado entre páginas o entre cotizaciones
+                        # (ej: cuando vuelve a decir "CODIGO SKU DESCRIPCION CANTIDAD...")
+                        coincidencias_encabezado = sum(1 for c in nombres_cols if str(r[c]).strip().lower() in encabezados_lower)
+                        if coincidencias_encabezado >= 2:
                             continue
 
-                        texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
-                        if any(term in texto_completo_fila for term in PALABRAS_TOTALES):
+                        # 2. Descartar líneas de membrete, subtotales o títulos de cotización ("Cotización #3547...")
+                        if any(term in texto_completo_fila for term in PALABRAS_DESCARTAR):
+                            continue
+
+                        # 3. Validar cantidad numérica
+                        cant_str = str(datos_dict.get(col_cant_elegida, "1")).strip().replace(",", "")
+                        cant_match = re.search(r"[-+]?\d*\.?\d+", cant_str)
+                        if not cant_match:
+                            # Si no tiene un número en la columna de cantidad, no es un producto
+                            continue
+                        
+                        try:
+                            cant_val = int(float(cant_match.group()))
+                        except Exception:
+                            cant_val = 1
+                        
+                        # Si la cantidad es 0 o negativa, no corresponde a un ítem a recibir
+                        if cant_val <= 0:
                             continue
 
                         cod_barra_val = ""
                         if col_barra_elegida != "(Sin Código de Barra)":
                             cod_barra_val = str(datos_dict.get(col_barra_elegida, "")).strip().replace(" ", "")
 
-                        cant_str = str(datos_dict.get(col_cant_elegida, "1")).strip().replace(",", "")
-                        try:
-                            cant_match = re.search(r"[-+]?\d*\.?\d+", cant_str)
-                            cant_val = int(float(cant_match.group())) if cant_match else 1
-                        except Exception:
-                            cant_val = 1
-                        
                         filas_a_insertar.append({
                             "factura": nuevo_nom_factura.strip(),
                             "datos_json": datos_dict,
@@ -380,7 +427,7 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                                 lote = filas_a_insertar[i:i + batch_size]
                                 supabase.table("productos_dinamicos").insert(lote).execute()
 
-                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada sin filas de totales con {len(filas_a_insertar)} productos!")
+                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada limpiamente con {len(filas_a_insertar)} productos reales!")
                             st.session_state.pop("df_raw_pdf", None)
                             st.session_state.pop("raw_pdf_name", None)
                             st.rerun()
@@ -599,12 +646,10 @@ if factura_activa and factura_activa != "Sin facturas":
                             
                             desc_corta = nombre_producto[:35]
 
-                            # Si el artículo aún tiene unidades pendientes de contar
                             if faltan_uds > 0:
                                 col_input_cant, col_btn_add, col_btn_tach = st.columns([1.1, 1.2, 1.4])
                                 
                                 with col_input_cant:
-                                    # Campo numérico rápido: por defecto sugiere lo que falta (o 1)
                                     val_sugerido = faltan_uds if faltan_uds <= 12 else 1
                                     cant_a_sumar = st.number_input(
                                         "Contar",
@@ -629,13 +674,11 @@ if factura_activa and factura_activa != "Sin facturas":
                                         st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente ({prod['_cant_total']} unidades)."
                                         st.rerun()
                             else:
-                                # Ya está completado: mostrar directamente la opción de revertir / destachar
                                 st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
                                 if st.button("↩️ Destachar / Corregir", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
                                     actualizar_producto_dinamico(prod['_id'], resetear=True)
                                     st.rerun()
 
-                            # Si está en proceso (con más de 0 pero menos del total), damos también acceso a reiniciar si contó mal
                             if 0 < prod['CANT. REGISTRADA'] < prod['_cant_total']:
                                 if st.button("↩️ Reiniciar a 0 este conteo", type="secondary", use_container_width=True, key=f"dest_parcial_{prod['_id']}_{sufijo_key}"):
                                     actualizar_producto_dinamico(prod['_id'], resetear=True)
