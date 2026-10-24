@@ -297,6 +297,18 @@ with st.sidebar:
     st.header("📂 Factura en Trabajo")
     facturas_lista = obtener_facturas()
     factura_activa = st.selectbox("Seleccionar Factura Activa:", facturas_lista if facturas_lista else ["Sin facturas"])
+    
+    # Detector de cambio de factura para limpiar el buscador automáticamente
+    if "factura_previa" not in st.session_state:
+        st.session_state["factura_previa"] = factura_activa
+    elif st.session_state["factura_previa"] != factura_activa:
+        st.session_state["factura_previa"] = factura_activa
+        st.session_state["input_scan_val"] = ""
+        if "input_scan" in st.session_state:
+            st.session_state["input_scan"] = ""
+        st.session_state.pop("mensaje_exito", None)
+        st.rerun()
+
     if st.button("🔄 Refrescar datos", use_container_width=True):
         st.rerun()
     st.divider()
