@@ -22,6 +22,28 @@ st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦
 
 st.markdown("""
 <style>
+    /* Estilos de las pestañas principales */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #f1f5f9;
+        padding: 6px;
+        border-radius: 10px;
+        border: 1px solid #e2e8f0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-size: 15px;
+        font-weight: 700;
+        color: #64748b;
+        padding: 10px 22px;
+        border-radius: 8px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important;
+        color: #2563eb !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+
+    /* Estilos del cuadro de búsqueda y formulario */
     div[data-testid="stForm"] {
         background: #f8fafc;
         border: 2px solid #2563eb;
@@ -243,7 +265,6 @@ def extraer_todas_las_tablas(uploaded_file):
     normalizadas = [r + [""] * (max_c - len(r)) for r in filas_totales]
     return pd.DataFrame(normalizadas)
 
-# --- DETECTOR AUTOMÁTICO DE FILA DE ENCABEZADOS REALES ---
 def auto_detectar_fila_encabezados(df):
     keywords = ["codigo", "código", "sku", "descripcion", "descripción", "articulo", "artículo", "cantidad", "cant", "precio", "total", "barra", "ean"]
     mejor_fila = 1
@@ -251,7 +272,6 @@ def auto_detectar_fila_encabezados(df):
     limite = min(len(df), 20)
     for i in range(limite):
         fila_texto = " ".join([str(val).lower() for val in df.iloc[i]])
-        # Ignorar si es una fila de resumen superior ("total productos", "total unidades", "cotizaciones")
         if any(term in fila_texto for term in ["total productos", "total unidades", "cotizaciones", "regla de calculo"]):
             continue
         coincidencias = sum(1 for kw in keywords if kw in fila_texto)
@@ -262,7 +282,7 @@ def auto_detectar_fila_encabezados(df):
 
 # --- CABECERA PRINCIPAL MODERNA ---
 st.markdown("""
-<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 22px 28px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: space-between;">
+<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 22px 28px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: space-between;">
     <div>
         <div style="display: flex; align-items: center; gap: 12px;">
             <span style="font-size: 32px;">📦</span>
@@ -274,9 +294,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("📂 Facturas Disponibles")
+    st.header("📂 Factura en Trabajo")
     facturas_lista = obtener_facturas()
-    factura_activa = st.selectbox("Seleccionar Factura a trabajar:", facturas_lista if facturas_lista else ["Sin facturas"])
+    factura_activa = st.selectbox("Seleccionar Factura Activa:", facturas_lista if facturas_lista else ["Sin facturas"])
     if st.button("🔄 Refrescar datos", use_container_width=True):
         st.rerun()
     st.divider()
@@ -290,13 +310,348 @@ with st.sidebar:
                     st.success(f"Factura '{factura_activa}' eliminada.")
                     st.rerun()
 
-# SECCIÓN DE SUBIDA DE FACTURAS
-with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factura_activa == "Sin facturas")):
+# --- PESTAÑAS PRINCIPALES DEL SISTEMA ---
+tab_operativa, tab_subida = st.tabs([
+    "🔍 Chequeo y Pistoleo Diario",
+    "📥 Cargar / Configurar Nueva Factura"
+])
+
+# ==============================================================================
+# PESTAÑA 1: ÁREA OPERATIVA DE CHEQUEO Y PISTOLEO (100% LIMPIA)
+# ==============================================================================
+with tab_operativa:
+    if factura_activa and factura_activa != "Sin facturas":
+        columnas_orig, col_barra_cfg, col_cant_cfg = obtener_info_factura(factura_activa)
+        df_act = cargar_productos_factura(factura_activa)
+
+        if not df_act.empty:
+            tot_unidades = int(df_act['_cant_total'].sum())
+            tot_registradas = int(df_act['CANT. REGISTRADA'].sum())
+            tot_items = len(df_act)
+            items_listos = len(df_act[df_act['ESTADO'] == 'Completado'])
+            progreso = (tot_registradas / tot_unidades) if tot_unidades > 0 else 0.0
+
+            # --- TARJETAS KPI ---
+            c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
+
+            with c_card1:
+                st.markdown(f"""
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #2563eb; border-radius: 10px; padding: 14px 18px; min-height: 98px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Factura Activa</div>
+                    <div style="font-size: 17px; font-weight: 700; color: #0f172a; word-break: break-word; line-height: 1.35;" title="{factura_activa}">{factura_activa}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with c_card2:
+                st.markdown(f"""
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #0891b2; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Ítems Listos</div>
+                    <div style="font-size: 26px; font-weight: 800; color: #0891b2; line-height: 1.1;">{items_listos} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_items}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with c_card3:
+                color_unidades = "#16a34a" if tot_registradas >= tot_unidades else "#d97706"
+                st.markdown(f"""
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_unidades}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Unidades</div>
+                    <div style="font-size: 26px; font-weight: 800; color: {color_unidades}; line-height: 1.1;">{tot_registradas} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_unidades}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with c_card4:
+                color_pct = "#16a34a" if progreso >= 1.0 else "#2563eb"
+                st.markdown(f"""
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_pct}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">% Avance Total</div>
+                    <div style="font-size: 26px; font-weight: 800; color: {color_pct}; line-height: 1.1;">{progreso * 100:.1f} %</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.progress(min(progreso, 1.0))
+            st.write("")
+
+            # CONTROL DE RESET DE BUSCADOR
+            if "input_scan_val" not in st.session_state:
+                st.session_state["input_scan_val"] = ""
+
+            if "mensaje_exito" in st.session_state:
+                st.success(st.session_state.pop("mensaje_exito"))
+
+            # ESCÁNER CON CÁMARA
+            with st.expander("📷 Escanear con Cámara del Celular / Laptop", expanded=False):
+                st.info("💡 Apunta la cámara directamente al código de barras del producto:")
+                foto_captura = st.camera_input("Capturar código de barra", key="cam_scanner_input")
+                if foto_captura is not None:
+                    codigo_leido = decodificar_codigo_imagen(foto_captura)
+                    if codigo_leido:
+                        st.session_state["input_scan_val"] = codigo_leido
+                        st.success(f"🎯 Código de barra detectado: `{codigo_leido}`")
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ No se logró detectar un código de barras claro. Intenta acercar o enfocar mejor.")
+
+            # BUSCADOR ACTIVO
+            st.markdown("""
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 22px;">⚡</span>
+                <span style="font-size: 19px; font-weight: 800; color: #1e293b; letter-spacing: -0.3px;">Pistoleo y Búsqueda Activa</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.form("form_escaneo_dinamico", clear_on_submit=False):
+                c_in, c_btn = st.columns([4, 1.2])
+                with c_in:
+                    query = st.text_input(
+                        "Pistolea código de barra o escribe nombre/código del producto:",
+                        value=st.session_state.get("input_scan_val", ""),
+                        placeholder="Ej. 7426500... o CP VERDE o Marcador...",
+                        key="input_scan"
+                    ).strip().lower()
+                with c_btn:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    btn_buscar = st.form_submit_button("🔍 Buscar / Pistolear", type="primary", use_container_width=True)
+
+            if query != st.session_state.get("input_scan_val", ""):
+                st.session_state["input_scan_val"] = query
+
+            if query:
+                query_limpio = query.replace(" ", "").replace("-", "").replace("_", "")
+                palabras_busqueda = query.split()
+
+                encontrados = []
+                for _, r in df_act.iterrows():
+                    if r['_codigo_barra'] and query == str(r['_codigo_barra']).lower():
+                        encontrados.append(r)
+                        continue
+
+                    valores_fila_texto = " ".join([str(r[c]).lower() for c in columnas_orig if c in r])
+                    valores_fila_sin_signos = valores_fila_texto.replace(" ", "").replace("-", "").replace("_", "")
+
+                    if query_limpio and len(query_limpio) >= 3 and query_limpio in valores_fila_sin_signos:
+                        encontrados.append(r)
+                    elif all(p in valores_fila_texto for p in palabras_busqueda):
+                        encontrados.append(r)
+
+                if encontrados:
+                    def render_tarjeta_producto(prod, sufijo_key=""):
+                        with st.container(border=True):
+                            nombre_producto = ""
+                            for c in columnas_orig:
+                                c_low = c.lower()
+                                if any(w in c_low for w in ["desc", "articulo", "detalle", "producto"]):
+                                    val = str(prod.get(c, "")).strip()
+                                    if val:
+                                        nombre_producto = val
+                                        break
+                            if not nombre_producto:
+                                nombre_producto = " | ".join([f"{c}: {prod.get(c, '')}" for c in columnas_orig[:2] if str(prod.get(c, "")).strip()])
+
+                            cod_extra = ""
+                            for c in columnas_orig:
+                                c_low = c.lower()
+                                if ("cod" in c_low or "item" in c_low or "ref" in c_low) and "barra" not in c_low:
+                                    val = str(prod.get(c, "")).strip()
+                                    if val:
+                                        cod_extra = f"<span style='background: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-right: 8px;'>CÓD: {val}</span>"
+                                        break
+
+                            st.markdown(f"""
+                            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+                                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">DESCRIPCIÓN DEL ARTÍCULO:</div>
+                                <div style="font-size: 20px; font-weight: 800; color: #0f172a; line-height: 1.3;">{cod_extra}{nombre_producto}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            val_precio_compra = "-"
+                            val_total = "-"
+                            for c in columnas_orig:
+                                c_low = c.lower()
+                                if ("precio" in c_low or "unit" in c_low or "costo" in c_low) and "total" not in c_low:
+                                    if str(prod.get(c, "")).strip():
+                                        val_precio_compra = str(prod.get(c, "")).strip()
+                                elif "total" in c_low:
+                                    if str(prod.get(c, "")).strip():
+                                        val_total = str(prod.get(c, "")).strip()
+
+                            faltan_uds = max(0, prod['_cant_total'] - prod['CANT. REGISTRADA'])
+
+                            c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.5])
+                            
+                            with c_cant:
+                                st.markdown(
+                                    f"<div style='background-color: #f1f3f4; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #1a73e8;'>"
+                                    f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>CANT. REQUERIDA</span><br>"
+                                    f"<strong style='font-size: 28px; color: #1a73e8;'>{prod['_cant_total']}</strong>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+                            
+                            with c_reg:
+                                col_r = "#1e8e3e" if prod['CANT. REGISTRADA'] >= prod['_cant_total'] else ("#d97706" if prod['CANT. REGISTRADA'] > 0 else "#5f6368")
+                                st.markdown(
+                                    f"<div style='background-color: #f1f3f4; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid {col_r};'>"
+                                    f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>YA REGISTRADAS</span><br>"
+                                    f"<strong style='font-size: 28px; color: {col_r};'>{prod['CANT. REGISTRADA']}</strong>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+
+                            with c_pcompra:
+                                st.markdown(
+                                    f"<div style='background-color: #fef7e0; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #f2994a;'>"
+                                    f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>PRECIO COMPRA</span><br>"
+                                    f"<strong style='font-size: 24px; color: #b05a00;'>{val_precio_compra}</strong>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+
+                            with c_ptotal:
+                                st.markdown(
+                                    f"<div style='background-color: #fef7e0; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #d97706;'>"
+                                    f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>TOTAL (L)</span><br>"
+                                    f"<strong style='font-size: 24px; color: #92400e;'>{val_total}</strong>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+
+                            with c_est:
+                                st.write("")
+                                if prod['ESTADO'] == 'Completado':
+                                    st.success("✅ COMPLETADO / TACHADO")
+                                elif prod['ESTADO'] == 'En Proceso':
+                                    st.warning(f"⏳ EN PROCESO ({faltan_uds} rest.)")
+                                else:
+                                    st.info("⚪ PENDIENTE")
+
+                            with c_btns:
+                                st.markdown("<p style='font-weight: 700; margin-bottom: 3px; font-size: 12px; color: #334155;'>⚡ Conteo Rápido / Registro:</p>", unsafe_allow_html=True)
+                                
+                                desc_corta = nombre_producto[:35]
+
+                                if faltan_uds > 0:
+                                    col_input_cant, col_btn_add, col_btn_tach = st.columns([1.1, 1.2, 1.4])
+                                    
+                                    with col_input_cant:
+                                        val_sugerido = faltan_uds if faltan_uds <= 12 else 1
+                                        cant_a_sumar = st.number_input(
+                                            "Contar",
+                                            min_value=1,
+                                            max_value=max(1, faltan_uds),
+                                            value=val_sugerido,
+                                            step=1,
+                                            key=f"num_{prod['_id']}_{sufijo_key}",
+                                            label_visibility="collapsed"
+                                        )
+                                    with col_btn_add:
+                                        if st.button(f"➕ Sumar {cant_a_sumar}", use_container_width=True, key=f"btn_add_{prod['_id']}_{sufijo_key}"):
+                                            actualizar_producto_dinamico(prod['_id'], cant_sumar=int(cant_a_sumar))
+                                            if (prod['CANT. REGISTRADA'] + int(cant_a_sumar)) >= prod['_cant_total']:
+                                                st.session_state["input_scan_val"] = ""
+                                                st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
+                                            st.rerun()
+                                    with col_btn_tach:
+                                        if st.button("✔️ Tachar Todo", type="primary", use_container_width=True, help=f"Registra directamente las {faltan_uds} unidades restantes", key=f"tach_{prod['_id']}_{sufijo_key}"):
+                                            actualizar_producto_dinamico(prod['_id'], completar=True)
+                                            st.session_state["input_scan_val"] = ""
+                                            st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente ({prod['_cant_total']} unidades)."
+                                            st.rerun()
+                                else:
+                                    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                                    if st.button("↩️ Destachar / Corregir", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], resetear=True)
+                                        st.rerun()
+
+                                if 0 < prod['CANT. REGISTRADA'] < prod['_cant_total']:
+                                    if st.button("↩️ Reiniciar a 0 este conteo", type="secondary", use_container_width=True, key=f"dest_parcial_{prod['_id']}_{sufijo_key}"):
+                                        actualizar_producto_dinamico(prod['_id'], resetear=True)
+                                        st.rerun()
+
+                            st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+
+                            st.markdown("##### 📑 Datos completos del artículo en la factura:")
+                            cols_por_fila = 4
+                            grid_cols = st.columns(cols_por_fila)
+                            for idx, campo in enumerate(columnas_orig):
+                                valor_campo = prod.get(campo, "")
+                                c_actual = grid_cols[idx % cols_por_fila]
+                                with c_actual:
+                                    es_monetario = any(w in campo.lower() for w in ['precio', 'unit', 'costo', 'total', 'isv', 'p. unit'])
+                                    color_texto = "#b05a00" if es_monetario else "#202124"
+                                    peso_texto = "bold" if es_monetario else "normal"
+                                    
+                                    st.markdown(
+                                        f"<div style='margin-bottom: 8px; background: #fafafa; padding: 6px 10px; border-radius: 6px; border: 1px solid #e0e0e0;'>"
+                                        f"<span style='font-size: 11px; color: #70757a; font-weight: 600; text-transform: uppercase;'>{campo}</span><br>"
+                                        f"<span style='font-size: 14px; color: {color_texto}; font-weight: {peso_texto};'>{valor_campo if valor_campo != '' else '-'}</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True
+                                    )
+
+                    if len(encontrados) == 1:
+                        st.markdown("### 📌 Producto Seleccionado")
+                        render_tarjeta_producto(encontrados[0], sufijo_key="unico")
+                    else:
+                        st.markdown(f"### 📋 Se encontraron {len(encontrados)} productos coincidentes:")
+                        st.caption("Selecciona el producto exacto en la lista desplegable o revisa cada uno abajo con sus botones de registro:")
+
+                        opciones_items = []
+                        for idx, p in enumerate(encontrados):
+                            desc_candidata = ""
+                            for c in columnas_orig:
+                                if any(w in c.lower() for w in ["desc", "prod", "articulo", "detalle"]):
+                                    desc_candidata = str(p.get(c, ""))
+                                    break
+                            if not desc_candidata:
+                                desc_candidata = " | ".join([f"{c}: {p.get(c, '')}" for c in columnas_orig[:2]])
+                            
+                            opciones_items.append(f"#{idx+1}: {desc_candidata} (Req: {p['_cant_total']} | Reg: {p['CANT. REGISTRADA']} | {p['ESTADO']})")
+
+                        item_seleccionado_idx = st.selectbox("👇 Elige el producto específico a registrar:", range(len(opciones_items)), format_func=lambda i: opciones_items[i])
+                        
+                        st.markdown("#### 👉 Producto Seleccionado para Registrar:")
+                        render_tarjeta_producto(encontrados[item_seleccionado_idx], sufijo_key="select")
+
+                        with st.expander(f"👁️ Ver todos los {len(encontrados)} resultados coincidentes desplegados hacia abajo", expanded=False):
+                            for i_m, prod_multi in enumerate(encontrados):
+                                st.markdown(f"**Coincidencia {i_m + 1} de {len(encontrados)}:**")
+                                render_tarjeta_producto(prod_multi, sufijo_key=f"list_{i_m}")
+                                st.write("")
+                else:
+                    st.error("❌ No se encontró ningún artículo que coincida con esa búsqueda en esta factura.")
+
+            # TABLA GENERAL
+            st.divider()
+            st.subheader("📋 Lista Completa con Todas las Columnas del Proveedor")
+
+            def estilo_fila(row):
+                if row['ESTADO'] == 'Completado':
+                    return ['background-color: #d4edda; color: #155724; text-decoration: line-through;'] * len(row)
+                elif row['ESTADO'] == 'En Proceso':
+                    return ['background-color: #fff3cd; color: #856404;'] * len(row)
+                return [''] * len(row)
+
+            columnas_mostrar = ['ESTADO', 'CANT. REGISTRADA'] + [c for c in columnas_orig if c in df_act.columns]
+            df_grid = df_act[columnas_mostrar]
+
+            st.dataframe(df_grid.style.apply(estilo_fila, axis=1), use_container_width=True, height=450)
+        else:
+            st.info("ℹ️ La factura seleccionada aún no tiene artículos registrados.")
+    else:
+        st.info("ℹ️ No hay ninguna factura seleccionada. Dirígete a la pestaña **'📥 Cargar / Configurar Nueva Factura'** para subir tu primer PDF.")
+
+# ==============================================================================
+# PESTAÑA 2: ÁREA DE CARGA Y CONFIGURACIÓN DE FACTURAS (SEPARADA)
+# ==============================================================================
+with tab_subida:
+    st.subheader("📄 Carga y Configuración de Facturas (PDF)")
+    st.caption("Sube el PDF de cualquier proveedor. Esta sección está aislada para no interferir con el trabajo diario de bodega o chequeo.")
+
     c_nom, c_file = st.columns([1, 2])
     with c_nom:
-        nuevo_nom_factura = st.text_input("Nombre o N° de Factura:", placeholder="Ej. Factura_01")
+        nuevo_nom_factura = st.text_input("Nombre o N° de Factura:", placeholder="Ej. Factura_01 o Pacasa_Expo")
     with c_file:
-        archivo_pdf = st.file_uploader("Cargar PDF del proveedor:", type=["pdf"], key="nuevo_pdf")
+        archivo_pdf = st.file_uploader("Cargar PDF del proveedor:", type=["pdf"], key="nuevo_pdf_tab")
 
     if archivo_pdf:
         if "df_raw_pdf" not in st.session_state or st.session_state.get("raw_pdf_name") != archivo_pdf.name:
@@ -306,9 +661,8 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
         df_raw = st.session_state.get("df_raw_pdf")
 
         if df_raw is not None and not df_raw.empty:
-            st.subheader("Configuración de columnas de esta factura")
+            st.markdown("#### ⚙️ Configuración de Columnas")
             
-            # Detectar automáticamente la fila real de encabezados
             fila_sugerida = auto_detectar_fila_encabezados(df_raw)
             fila_encabezados = st.number_input(
                 "Fila donde están los nombres de las columnas (Encabezados reales de productos):",
@@ -349,14 +703,13 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
             st.write("**Vista previa de los primeros productos detectados:**")
             st.dataframe(df_preview_final.head(6), use_container_width=True)
 
-            if st.button("🚀 Guardar en la Nube (Supabase)", type="primary"):
+            if st.button("🚀 Guardar en la Nube (Supabase)", type="primary", use_container_width=True):
                 if not nuevo_nom_factura.strip():
                     st.error("Asigna un nombre a la factura.")
                 else:
                     filas_a_insertar = []
                     encabezados_lower = [str(c).lower().strip() for c in nombres_cols]
                     
-                    # Palabras que identifican membretes, totales o separadores de cotización a descartar
                     PALABRAS_DESCARTAR = [
                         "totales consolidados", "total consolidado", "totales", "subtotal", "sub total",
                         "gran total", "suma total", "cotizacion", "cotización", "cotizaciones",
@@ -372,21 +725,16 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                         
                         texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
 
-                        # 1. Descartar si es repetición de encabezado entre páginas o entre cotizaciones
-                        # (ej: cuando vuelve a decir "CODIGO SKU DESCRIPCION CANTIDAD...")
                         coincidencias_encabezado = sum(1 for c in nombres_cols if str(r[c]).strip().lower() in encabezados_lower)
                         if coincidencias_encabezado >= 2:
                             continue
 
-                        # 2. Descartar líneas de membrete, subtotales o títulos de cotización ("Cotización #3547...")
                         if any(term in texto_completo_fila for term in PALABRAS_DESCARTAR):
                             continue
 
-                        # 3. Validar cantidad numérica
                         cant_str = str(datos_dict.get(col_cant_elegida, "1")).strip().replace(",", "")
                         cant_match = re.search(r"[-+]?\d*\.?\d+", cant_str)
                         if not cant_match:
-                            # Si no tiene un número en la columna de cantidad, no es un producto
                             continue
                         
                         try:
@@ -394,7 +742,6 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                         except Exception:
                             cant_val = 1
                         
-                        # Si la cantidad es 0 o negativa, no corresponde a un ítem a recibir
                         if cant_val <= 0:
                             continue
 
@@ -427,328 +774,9 @@ with st.expander("➕ Subir Factura PDF (Cualquier Proveedor)", expanded=(factur
                                 lote = filas_a_insertar[i:i + batch_size]
                                 supabase.table("productos_dinamicos").insert(lote).execute()
 
-                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada limpiamente con {len(filas_a_insertar)} productos reales!")
+                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada limpiamente con {len(filas_a_insertar)} productos!")
                             st.session_state.pop("df_raw_pdf", None)
                             st.session_state.pop("raw_pdf_name", None)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error al guardar en Supabase: {e}")
-
-# --- ÁREA OPERATIVA DE PISTOLEO Y BÚSQUEDA ---
-if factura_activa and factura_activa != "Sin facturas":
-    columnas_orig, col_barra_cfg, col_cant_cfg = obtener_info_factura(factura_activa)
-    df_act = cargar_productos_factura(factura_activa)
-
-    if not df_act.empty:
-        tot_unidades = int(df_act['_cant_total'].sum())
-        tot_registradas = int(df_act['CANT. REGISTRADA'].sum())
-        tot_items = len(df_act)
-        items_listos = len(df_act[df_act['ESTADO'] == 'Completado'])
-        progreso = (tot_registradas / tot_unidades) if tot_unidades > 0 else 0.0
-
-        # --- TARJETAS KPI REDISEÑADAS ---
-        c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
-
-        with c_card1:
-            st.markdown(f"""
-            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #2563eb; border-radius: 10px; padding: 14px 18px; min-height: 98px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Factura Activa</div>
-                <div style="font-size: 17px; font-weight: 700; color: #0f172a; word-break: break-word; line-height: 1.35;" title="{factura_activa}">{factura_activa}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c_card2:
-            st.markdown(f"""
-            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #0891b2; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Ítems Listos</div>
-                <div style="font-size: 26px; font-weight: 800; color: #0891b2; line-height: 1.1;">{items_listos} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_items}</span></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c_card3:
-            color_unidades = "#16a34a" if tot_registradas >= tot_unidades else "#d97706"
-            st.markdown(f"""
-            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_unidades}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Unidades</div>
-                <div style="font-size: 26px; font-weight: 800; color: {color_unidades}; line-height: 1.1;">{tot_registradas} <span style="font-size: 15px; font-weight: 600; color: #94a3b8;">/ {tot_unidades}</span></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c_card4:
-            color_pct = "#16a34a" if progreso >= 1.0 else "#2563eb"
-            st.markdown(f"""
-            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid {color_pct}; border-radius: 10px; padding: 14px 18px; min-height: 98px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">% Avance Total</div>
-                <div style="font-size: 26px; font-weight: 800; color: {color_pct}; line-height: 1.1;">{progreso * 100:.1f} %</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.progress(min(progreso, 1.0))
-        st.divider()
-
-        # FORMULARIO DE BÚSQUEDA CON CONTROL DE RESET
-        if "input_scan_val" not in st.session_state:
-            st.session_state["input_scan_val"] = ""
-
-        if "mensaje_exito" in st.session_state:
-            st.success(st.session_state.pop("mensaje_exito"))
-
-        # --- SECCIÓN DE ESCÁNER CON CÁMARA (CELULAR O COMPUTADORA) ---
-        with st.expander("📷 Escanear con Cámara del Celular / Laptop", expanded=False):
-            st.info("💡 Apunta la cámara directamente al código de barras del producto:")
-            foto_captura = st.camera_input("Capturar código de barra", key="cam_scanner_input")
-            if foto_captura is not None:
-                codigo_leido = decodificar_codigo_imagen(foto_captura)
-                if codigo_leido:
-                    st.session_state["input_scan_val"] = codigo_leido
-                    st.success(f"🎯 Código de barra detectado: `{codigo_leido}`")
-                    st.rerun()
-                else:
-                    st.warning("⚠️ No se logró detectar un código de barras claro. Intenta acercar o enfocar mejor.")
-
-        # --- ENCABEZADO DESTACADO DEL BUSCADOR ---
-        st.markdown("""
-        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="font-size: 22px;">⚡</span>
-            <span style="font-size: 19px; font-weight: 800; color: #1e293b; letter-spacing: -0.3px;">Pistoleo y Búsqueda Activa</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.form("form_escaneo_dinamico", clear_on_submit=False):
-            c_in, c_btn = st.columns([4, 1.2])
-            with c_in:
-                query = st.text_input(
-                    "Pistolea código de barra o escribe nombre/código del producto:",
-                    value=st.session_state.get("input_scan_val", ""),
-                    placeholder="Ej. 7426500... o CP VERDE o Marcador...",
-                    key="input_scan"
-                ).strip().lower()
-            with c_btn:
-                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                btn_buscar = st.form_submit_button("🔍 Buscar / Pistolear", type="primary", use_container_width=True)
-
-        if query != st.session_state.get("input_scan_val", ""):
-            st.session_state["input_scan_val"] = query
-
-        if query:
-            query_limpio = query.replace(" ", "").replace("-", "").replace("_", "")
-            palabras_busqueda = query.split()
-
-            encontrados = []
-            for _, r in df_act.iterrows():
-                if r['_codigo_barra'] and query == str(r['_codigo_barra']).lower():
-                    encontrados.append(r)
-                    continue
-
-                valores_fila_texto = " ".join([str(r[c]).lower() for c in columnas_orig if c in r])
-                valores_fila_sin_signos = valores_fila_texto.replace(" ", "").replace("-", "").replace("_", "")
-
-                if query_limpio and len(query_limpio) >= 3 and query_limpio in valores_fila_sin_signos:
-                    encontrados.append(r)
-                elif all(p in valores_fila_texto for p in palabras_busqueda):
-                    encontrados.append(r)
-
-            if encontrados:
-                def render_tarjeta_producto(prod, sufijo_key=""):
-                    with st.container(border=True):
-                        # 1. Obtener la descripción principal del producto
-                        nombre_producto = ""
-                        for c in columnas_orig:
-                            c_low = c.lower()
-                            if any(w in c_low for w in ["desc", "articulo", "detalle", "producto"]):
-                                val = str(prod.get(c, "")).strip()
-                                if val:
-                                    nombre_producto = val
-                                    break
-                        if not nombre_producto:
-                            nombre_producto = " | ".join([f"{c}: {prod.get(c, '')}" for c in columnas_orig[:2] if str(prod.get(c, "")).strip()])
-
-                        cod_extra = ""
-                        for c in columnas_orig:
-                            c_low = c.lower()
-                            if ("cod" in c_low or "item" in c_low or "ref" in c_low) and "barra" not in c_low:
-                                val = str(prod.get(c, "")).strip()
-                                if val:
-                                    cod_extra = f"<span style='background: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-right: 8px;'>CÓD: {val}</span>"
-                                    break
-
-                        # ENCABEZADO DESTACADO CON NOMBRE EN GRANDE
-                        st.markdown(f"""
-                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
-                            <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">DESCRIPCIÓN DEL ARTÍCULO:</div>
-                            <div style="font-size: 20px; font-weight: 800; color: #0f172a; line-height: 1.3;">{cod_extra}{nombre_producto}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        val_precio_compra = "-"
-                        val_total = "-"
-                        for c in columnas_orig:
-                            c_low = c.lower()
-                            if ("precio" in c_low or "unit" in c_low or "costo" in c_low) and "total" not in c_low:
-                                if str(prod.get(c, "")).strip():
-                                    val_precio_compra = str(prod.get(c, "")).strip()
-                            elif "total" in c_low:
-                                if str(prod.get(c, "")).strip():
-                                    val_total = str(prod.get(c, "")).strip()
-
-                        faltan_uds = max(0, prod['_cant_total'] - prod['CANT. REGISTRADA'])
-
-                        c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.5])
-                        
-                        with c_cant:
-                            st.markdown(
-                                f"<div style='background-color: #f1f3f4; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #1a73e8;'>"
-                                f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>CANT. REQUERIDA</span><br>"
-                                f"<strong style='font-size: 28px; color: #1a73e8;'>{prod['_cant_total']}</strong>"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
-                        
-                        with c_reg:
-                            col_r = "#1e8e3e" if prod['CANT. REGISTRADA'] >= prod['_cant_total'] else ("#d97706" if prod['CANT. REGISTRADA'] > 0 else "#5f6368")
-                            st.markdown(
-                                f"<div style='background-color: #f1f3f4; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid {col_r};'>"
-                                f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>YA REGISTRADAS</span><br>"
-                                f"<strong style='font-size: 28px; color: {col_r};'>{prod['CANT. REGISTRADA']}</strong>"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
-
-                        with c_pcompra:
-                            st.markdown(
-                                f"<div style='background-color: #fef7e0; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #f2994a;'>"
-                                f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>PRECIO COMPRA</span><br>"
-                                f"<strong style='font-size: 24px; color: #b05a00;'>{val_precio_compra}</strong>"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
-
-                        with c_ptotal:
-                            st.markdown(
-                                f"<div style='background-color: #fef7e0; padding: 10px; border-radius: 8px; text-align: center; border-left: 5px solid #d97706;'>"
-                                f"<span style='font-size: 11px; color: #5f6368; font-weight: 600;'>TOTAL (L)</span><br>"
-                                f"<strong style='font-size: 24px; color: #92400e;'>{val_total}</strong>"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
-
-                        with c_est:
-                            st.write("")
-                            if prod['ESTADO'] == 'Completado':
-                                st.success("✅ COMPLETADO / TACHADO")
-                            elif prod['ESTADO'] == 'En Proceso':
-                                st.warning(f"⏳ EN PROCESO ({faltan_uds} rest.)")
-                            else:
-                                st.info("⚪ PENDIENTE")
-
-                        with c_btns:
-                            st.markdown("<p style='font-weight: 700; margin-bottom: 3px; font-size: 12px; color: #334155;'>⚡ Conteo Rápido / Registro:</p>", unsafe_allow_html=True)
-                            
-                            desc_corta = nombre_producto[:35]
-
-                            if faltan_uds > 0:
-                                col_input_cant, col_btn_add, col_btn_tach = st.columns([1.1, 1.2, 1.4])
-                                
-                                with col_input_cant:
-                                    val_sugerido = faltan_uds if faltan_uds <= 12 else 1
-                                    cant_a_sumar = st.number_input(
-                                        "Contar",
-                                        min_value=1,
-                                        max_value=max(1, faltan_uds),
-                                        value=val_sugerido,
-                                        step=1,
-                                        key=f"num_{prod['_id']}_{sufijo_key}",
-                                        label_visibility="collapsed"
-                                    )
-                                with col_btn_add:
-                                    if st.button(f"➕ Sumar {cant_a_sumar}", use_container_width=True, key=f"btn_add_{prod['_id']}_{sufijo_key}"):
-                                        actualizar_producto_dinamico(prod['_id'], cant_sumar=int(cant_a_sumar))
-                                        if (prod['CANT. REGISTRADA'] + int(cant_a_sumar)) >= prod['_cant_total']:
-                                            st.session_state["input_scan_val"] = ""
-                                            st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
-                                        st.rerun()
-                                with col_btn_tach:
-                                    if st.button("✔️ Tachar Todo", type="primary", use_container_width=True, help=f"Registra directamente las {faltan_uds} unidades restantes", key=f"tach_{prod['_id']}_{sufijo_key}"):
-                                        actualizar_producto_dinamico(prod['_id'], completar=True)
-                                        st.session_state["input_scan_val"] = ""
-                                        st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente ({prod['_cant_total']} unidades)."
-                                        st.rerun()
-                            else:
-                                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-                                if st.button("↩️ Destachar / Corregir", type="secondary", use_container_width=True, help="Regresa este artículo a 0 unidades registradas y estado Pendiente", key=f"dest_{prod['_id']}_{sufijo_key}"):
-                                    actualizar_producto_dinamico(prod['_id'], resetear=True)
-                                    st.rerun()
-
-                            if 0 < prod['CANT. REGISTRADA'] < prod['_cant_total']:
-                                if st.button("↩️ Reiniciar a 0 este conteo", type="secondary", use_container_width=True, key=f"dest_parcial_{prod['_id']}_{sufijo_key}"):
-                                    actualizar_producto_dinamico(prod['_id'], resetear=True)
-                                    st.rerun()
-
-                        st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-
-                        st.markdown("##### 📑 Datos completos del artículo en la factura:")
-                        cols_por_fila = 4
-                        grid_cols = st.columns(cols_por_fila)
-                        for idx, campo in enumerate(columnas_orig):
-                            valor_campo = prod.get(campo, "")
-                            c_actual = grid_cols[idx % cols_por_fila]
-                            with c_actual:
-                                es_monetario = any(w in campo.lower() for w in ['precio', 'unit', 'costo', 'total', 'isv', 'p. unit'])
-                                color_texto = "#b05a00" if es_monetario else "#202124"
-                                peso_texto = "bold" if es_monetario else "normal"
-                                
-                                st.markdown(
-                                    f"<div style='margin-bottom: 8px; background: #fafafa; padding: 6px 10px; border-radius: 6px; border: 1px solid #e0e0e0;'>"
-                                    f"<span style='font-size: 11px; color: #70757a; font-weight: 600; text-transform: uppercase;'>{campo}</span><br>"
-                                    f"<span style='font-size: 14px; color: {color_texto}; font-weight: {peso_texto};'>{valor_campo if valor_campo != '' else '-'}</span>"
-                                    f"</div>",
-                                    unsafe_allow_html=True
-                                )
-
-                if len(encontrados) == 1:
-                    st.markdown("### 📌 Producto Seleccionado")
-                    render_tarjeta_producto(encontrados[0], sufijo_key="unico")
-                else:
-                    st.markdown(f"### 📋 Se encontraron {len(encontrados)} productos coincidentes:")
-                    st.caption("Selecciona el producto exacto en la lista desplegable o revisa cada uno abajo con sus botones de registro:")
-
-                    opciones_items = []
-                    for idx, p in enumerate(encontrados):
-                        desc_candidata = ""
-                        for c in columnas_orig:
-                            if any(w in c.lower() for w in ["desc", "prod", "articulo", "detalle"]):
-                                desc_candidata = str(p.get(c, ""))
-                                break
-                        if not desc_candidata:
-                            desc_candidata = " | ".join([f"{c}: {p.get(c, '')}" for c in columnas_orig[:2]])
-                        
-                        opciones_items.append(f"#{idx+1}: {desc_candidata} (Req: {p['_cant_total']} | Reg: {p['CANT. REGISTRADA']} | {p['ESTADO']})")
-
-                    item_seleccionado_idx = st.selectbox("👇 Elige el producto específico a registrar:", range(len(opciones_items)), format_func=lambda i: opciones_items[i])
-                    
-                    st.markdown("#### 👉 Producto Seleccionado para Registrar:")
-                    render_tarjeta_producto(encontrados[item_seleccionado_idx], sufijo_key="select")
-
-                    with st.expander(f"👁️ Ver todos los {len(encontrados)} resultados coincidentes desplegados hacia abajo", expanded=False):
-                        for i_m, prod_multi in enumerate(encontrados):
-                            st.markdown(f"**Coincidencia {i_m + 1} de {len(encontrados)}:**")
-                            render_tarjeta_producto(prod_multi, sufijo_key=f"list_{i_m}")
-                            st.write("")
-            else:
-                st.error("❌ No se encontró ningún artículo que coincida con esa búsqueda en esta factura.")
-
-        # TABLA COMPLETA
-        st.divider()
-        st.subheader("📋 Lista Completa con Todas las Columnas del Proveedor")
-
-        def estilo_fila(row):
-            if row['ESTADO'] == 'Completado':
-                return ['background-color: #d4edda; color: #155724; text-decoration: line-through;'] * len(row)
-            elif row['ESTADO'] == 'En Proceso':
-                return ['background-color: #fff3cd; color: #856404;'] * len(row)
-            return [''] * len(row)
-
-        columnas_mostrar = ['ESTADO', 'CANT. REGISTRADA'] + [c for c in columnas_orig if c in df_act.columns]
-        df_grid = df_act[columnas_mostrar]
-
-        st.dataframe(df_grid.style.apply(estilo_fila, axis=1), use_container_width=True, height=450)
