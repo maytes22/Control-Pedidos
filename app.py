@@ -335,10 +335,11 @@ with tab_operativa:
             c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
 
             with c_card1:
+                nom_factura_mayus = str(factura_activa).upper()
                 st.markdown(f"""
-                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #2563eb; border-radius: 10px; padding: 14px 18px; min-height: 98px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                    <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Factura Activa</div>
-                    <div style="font-size: 17px; font-weight: 700; color: #0f172a; word-break: break-word; line-height: 1.35;" title="{factura_activa}">{factura_activa}</div>
+                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-left: 6px solid #2563eb; border-radius: 10px; padding: 12px 18px; min-height: 98px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+                    <div style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 2px;">⚡ FACTURA ACTIVA</div>
+                    <div style="font-size: 25px; font-weight: 900; color: #1e3a8a; word-break: break-word; line-height: 1.2; text-transform: uppercase;" title="{nom_factura_mayus}">{nom_factura_mayus}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
