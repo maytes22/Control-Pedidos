@@ -469,10 +469,35 @@ with tab_operativa:
                                         cod_extra = f"<span style='background: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-right: 8px;'>CÓD: {val}</span>"
                                         break
 
+                            faltan_uds = max(0, prod['_cant_total'] - prod['CANT. REGISTRADA'])
+
+                            # ESTILO DINÁMICO SEGÚN ESTADO (COMPLETADO, EN PROCESO O PENDIENTE)
+                            if prod['ESTADO'] == 'Completado':
+                                bg_header = "#dcfce7"
+                                border_header = "2px solid #16a34a"
+                                lbl_color = "#15803d"
+                                txt_color = "#14532d"
+                                lbl_tag = "✅ ARTÍCULO COMPLETADO / TACHADO"
+                                deco_txt = "text-decoration: line-through;"
+                            elif prod['ESTADO'] == 'En Proceso':
+                                bg_header = "#fef3c7"
+                                border_header = "2px solid #f59e0b"
+                                lbl_color = "#b45309"
+                                txt_color = "#78350f"
+                                lbl_tag = f"⏳ ARTÍCULO EN PROCESO ({faltan_uds} RESTANTES)"
+                                deco_txt = ""
+                            else:
+                                bg_header = "#f8fafc"
+                                border_header = "1.5px solid #cbd5e1"
+                                lbl_color = "#64748b"
+                                txt_color = "#0f172a"
+                                lbl_tag = "⚪ DESCRIPCIÓN DEL ARTÍCULO (PENDIENTE)"
+                                deco_txt = ""
+
                             st.markdown(f"""
-                            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
-                                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">DESCRIPCIÓN DEL ARTÍCULO:</div>
-                                <div style="font-size: 20px; font-weight: 800; color: #0f172a; line-height: 1.3;">{cod_extra}{nombre_producto}</div>
+                            <div style="background: {bg_header}; border: {border_header}; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+                                <div style="font-size: 11px; font-weight: 800; color: {lbl_color}; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">{lbl_tag}:</div>
+                                <div style="font-size: 21px; font-weight: 900; color: {txt_color}; line-height: 1.3; {deco_txt}">{cod_extra}{nombre_producto}</div>
                             </div>
                             """, unsafe_allow_html=True)
 
