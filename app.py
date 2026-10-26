@@ -429,21 +429,28 @@ with tab_operativa:
                 st.session_state["input_scan_val"] = query
 
             if query:
-                query_limpio = query.replace(" ", "").replace("-", "").replace("_", "")
-                palabras_busqueda = query.split()
+                # Soporte para comodines (% y *) y separadores comunes
+                query_normalizado = query.replace("%", " ").replace("*", " ").replace("+", " ").replace(",", " ")
+                query_limpio = query.replace(" ", "").replace("-", "").replace("_", "").replace("%", "").replace("*", "")
+                palabras_busqueda = [p.strip() for p in query_normalizado.split() if p.strip()]
 
                 encontrados = []
                 for _, r in df_act.iterrows():
-                    if r['_codigo_barra'] and query == str(r['_codigo_barra']).lower():
+                    # 1. Búsqueda por código de barras exacto o parcial limpio
+                    cod_bar_str = str(r['_codigo_barra']).lower().strip()
+                    if cod_bar_str and (query == cod_bar_str or query_limpio == cod_bar_str):
                         encontrados.append(r)
                         continue
 
+                    # Texto consolidado de todas las columnas de la fila
                     valores_fila_texto = " ".join([str(r[c]).lower() for c in columnas_orig if c in r])
                     valores_fila_sin_signos = valores_fila_texto.replace(" ", "").replace("-", "").replace("_", "")
 
+                    # 2. Coincidencia contigua directa o sin espacios
                     if query_limpio and len(query_limpio) >= 3 and query_limpio in valores_fila_sin_signos:
                         encontrados.append(r)
-                    elif all(p in valores_fila_texto for p in palabras_busqueda):
+                    # 3. Búsqueda flexible de palabras no contiguas (todas las palabras deben estar presentes)
+                    elif palabras_busqueda and all(p in valores_fila_texto for p in palabras_busqueda):
                         encontrados.append(r)
 
                 if encontrados:
