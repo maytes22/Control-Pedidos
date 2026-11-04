@@ -71,6 +71,46 @@ st.markdown("""
         letter-spacing: 0.3px;
         text-transform: uppercase;
     }
+
+    /* Botón Buscar / Pistolear dentro del Formulario (AZUL CORPORATIVO) */
+    div[data-testid="stForm"] button[kind="primary"] {
+        background-color: #2563eb !important;
+        color: #ffffff !important;
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        height: 48px !important;
+        box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25) !important;
+    }
+    div[data-testid="stForm"] button[kind="primary"]:hover {
+        background-color: #1d4ed8 !important;
+    }
+
+    /* Botón TACHAR TODO (VERDE ESMERALDA, MÁS GRANDE Y DESTACADO) */
+    button[kind="primary"]:not(div[data-testid="stForm"] button) {
+        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #16a34a !important;
+        font-size: 17px !important;
+        font-weight: 800 !important;
+        border-radius: 10px !important;
+        padding: 10px 20px !important;
+        min-height: 48px !important;
+        box-shadow: 0 4px 12px rgba(22, 163, 74, 0.28) !important;
+        letter-spacing: 0.4px !important;
+    }
+    button[kind="primary"]:not(div[data-testid="stForm"] button):hover {
+        background: linear-gradient(135deg, #15803d 0%, #166534 100%) !important;
+        box-shadow: 0 6px 16px rgba(22, 163, 74, 0.38) !important;
+    }
+
+    /* Botones Secundarios de Acciones Rápidas (Sumar lote y Destachar) */
+    button[kind="secondary"]:not(div[data-testid="stForm"] button) {
+        font-weight: 700 !important;
+        min-height: 48px !important;
+        border-radius: 8px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -596,7 +636,7 @@ with tab_operativa:
                                                 st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' completado y listo para el siguiente producto."
                                             st.rerun()
                                     with col_btn_tach:
-                                        if st.button("✔️ Tachar Todo", type="primary", use_container_width=True, help=f"Registra directamente las {faltan_uds} unidades restantes", key=f"tach_{prod['_id']}_{sufijo_key}"):
+                                        if st.button("✅ Tachar Todo", type="primary", use_container_width=True, help=f"Registra directamente las {faltan_uds} unidades restantes", key=f"tach_{prod['_id']}_{sufijo_key}"):
                                             actualizar_producto_dinamico(prod['_id'], completar=True)
                                             st.session_state["input_scan_val"] = ""
                                             st.session_state["mensaje_exito"] = f"✅ '{desc_corta}' tachado correctamente ({prod['_cant_total']} unidades)."
