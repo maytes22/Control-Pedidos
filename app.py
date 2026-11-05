@@ -381,7 +381,8 @@ with tab_operativa:
             tot_registradas = int(df_act['CANT. REGISTRADA'].sum())
             tot_items = len(df_act)
             items_listos = len(df_act[df_act['ESTADO'] == 'Completado'])
-            progreso = (tot_registradas / tot_unidades) if tot_unidades > 0 else 0.0
+            # Avance total y barra de progreso calculados en base a ítems listos / completados
+            progreso = (items_listos / tot_items) if tot_items > 0 else 0.0
 
             # --- TARJETAS KPI ---
             c_card1, c_card2, c_card3, c_card4 = st.columns([2.2, 1.2, 1.2, 1.2])
