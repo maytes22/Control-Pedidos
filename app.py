@@ -706,9 +706,40 @@ with tab_operativa:
                 else:
                     st.error("❌ No se encontró ningún artículo que coincida con esa búsqueda en esta factura.")
 
-            # TABLA GENERAL
+            # TABLA GENERAL CON FILTROS POR ESTADO
             st.divider()
-            st.subheader("📋 Lista Completa con Todas las Columnas del Proveedor")
+            col_tit_tabla, col_filtro_estado = st.columns([2.5, 2])
+            
+            with col_tit_tabla:
+                st.subheader("📋 Lista Completa con Todas las Columnas del Proveedor")
+
+            with col_filtro_estado:
+                # Contadores rápidos para las etiquetas del filtro
+                c_pend = len(df_act[df_act['ESTADO'] == 'Pendiente'])
+                c_proc = len(df_act[df_act['ESTADO'] == 'En Proceso'])
+                c_comp = len(df_act[df_act['ESTADO'] == 'Completado'])
+                
+                opciones_filtro = {
+                    f"Todos ({len(df_act)})": "Todos",
+                    f"⚪ Pendientes ({c_pend})": "Pendiente",
+                    f"⏳ En Proceso ({c_proc})": "En Proceso",
+                    f"✅ Completados ({c_comp})": "Completado"
+                }
+                
+                filtro_sel = st.radio(
+                    "Filtrar por estado:",
+                    options=list(opciones_filtro.keys()),
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="filtro_estado_tabla"
+                )
+                estado_elegido = opciones_filtro[filtro_sel]
+
+            # Filtrar DataFrame según selección
+            if estado_elegido != "Todos":
+                df_filtrado = df_act[df_act['ESTADO'] == estado_elegido].copy()
+            else:
+                df_filtrado = df_act.copy()
 
             def estilo_fila(row):
                 if row['ESTADO'] == 'Completado':
@@ -717,8 +748,8 @@ with tab_operativa:
                     return ['background-color: #fff3cd; color: #856404;'] * len(row)
                 return [''] * len(row)
 
-            columnas_mostrar = ['ESTADO', 'CANT. REGISTRADA'] + [c for c in columnas_orig if c in df_act.columns]
-            df_grid = df_act[columnas_mostrar]
+            columnas_mostrar = ['ESTADO', 'CANT. REGISTRADA'] + [c for c in columnas_orig if c in df_filtrado.columns]
+            df_grid = df_filtrado[columnas_mostrar]
 
             st.dataframe(df_grid.style.apply(estilo_fila, axis=1), use_container_width=True, height=450)
         else:
