@@ -349,28 +349,10 @@ st.markdown("""
 with st.sidebar:
     st.header("📂 Factura en Trabajo")
     facturas_lista, stats_facturas = obtener_facturas_con_progreso()
-    
-    def formatear_opcion_factura(nom):
-        if nom == "Sin facturas" or nom not in stats_facturas:
-            return nom
-        st_fac = stats_facturas[nom]
-        pct = st_fac["pct"]
-        tot = st_fac["total"]
-        comp = st_fac["completados"]
-        
-        # Barra gráfica compacta de progreso en texto para el selector
-        barra_ascii = "█" * int(round(pct * 6)) + "░" * (6 - int(round(pct * 6)))
-        if pct >= 1.0:
-            return f"✅ {nom.upper()} [{barra_ascii}] 100% (Listo)"
-        elif pct > 0:
-            return f"⏳ {nom.upper()} [{barra_ascii}] {pct*100:.1f}% ({comp}/{tot})"
-        else:
-            return f"⚪ {nom.upper()} [{barra_ascii}] 0% ({comp}/{tot})"
 
     factura_activa = st.selectbox(
         "Seleccionar Factura Activa:",
-        options=facturas_lista if facturas_lista else ["Sin facturas"],
-        format_func=formatear_opcion_factura
+        options=facturas_lista if facturas_lista else ["Sin facturas"]
     )
     
     # Detector de cambio de factura para limpiar el buscador automáticamente
