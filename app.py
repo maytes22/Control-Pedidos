@@ -3,7 +3,6 @@ import pandas as pd
 import pdfplumber
 import json
 import re
-from PIL import Image
 from supabase import create_client, Client
 
 try:
@@ -199,22 +198,6 @@ def eliminar_factura_completa(nombre_factura):
     except Exception as e:
         st.error(f"Error al eliminar la factura: {e}")
         return False
-
-# --- FUNCIÓN DECODIFICADORA DE CÓDIGOS DE BARRA DESDE CÁMARA ---
-def decodificar_codigo_imagen(imagen_file):
-    try:
-        img = Image.open(imagen_file)
-        if ZXING_AVAILABLE:
-            resultados = zxingcpp.read_barcodes(img)
-            if resultados:
-                return resultados[0].text.strip()
-        if PYZBAR_AVAILABLE:
-            resultados = pyzbar_decode(img)
-            if resultados:
-                return resultados[0].data.decode("utf-8").strip()
-    except Exception as e:
-        st.error(f"Error al procesar la imagen de la cámara: {e}")
-    return None
 
 # --- DICCIONARIO Y SEGMENTADOR DE PALABRAS PEGADAS ---
 PALABRAS_CLAVE = {
@@ -431,19 +414,6 @@ with tab_operativa:
 
             if "mensaje_exito" in st.session_state:
                 st.success(st.session_state.pop("mensaje_exito"))
-
-            # ESCÁNER CON CÁMARA
-            with st.expander("📷 Escanear con Cámara del Celular / Laptop", expanded=False):
-                st.info("💡 Apunta la cámara directamente al código de barras del producto:")
-                foto_captura = st.camera_input("Capturar código de barra", key="cam_scanner_input")
-                if foto_captura is not None:
-                    codigo_leido = decodificar_codigo_imagen(foto_captura)
-                    if codigo_leido:
-                        st.session_state["input_scan_val"] = codigo_leido
-                        st.success(f"🎯 Código de barra detectado: `{codigo_leido}`")
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ No se logró detectar un código de barras claro. Intenta acercar o enfocar mejor.")
 
             # BUSCADOR ACTIVO
             st.markdown("""
