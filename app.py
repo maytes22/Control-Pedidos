@@ -352,7 +352,8 @@ with st.sidebar:
 
     factura_activa = st.selectbox(
         "Seleccionar Factura Activa:",
-        options=facturas_lista if facturas_lista else ["Sin facturas"]
+        options=facturas_lista if facturas_lista else ["Sin facturas"],
+        format_func=lambda x: str(x).upper()
     )
     
     # Detector de cambio de factura para limpiar el buscador automáticamente
@@ -893,7 +894,7 @@ with tab_subida:
                             cod_barra_val = str(datos_dict.get(col_barra_elegida, "")).strip().replace(" ", "")
 
                         filas_a_insertar.append({
-                            "factura": nuevo_nom_factura.strip(),
+                            "factura": nuevo_nom_factura.strip().upper(),
                             "datos_json": datos_dict,
                             "codigo_barra": cod_barra_val,
                             "cant_total": cant_val,
@@ -904,13 +905,13 @@ with tab_subida:
                     if filas_a_insertar:
                         try:
                             supabase.table("facturas").upsert({
-                                "nombre": nuevo_nom_factura.strip(),
+                                "nombre": nuevo_nom_factura.strip().upper(),
                                 "columnas_json": nombres_cols,
                                 "col_barra": col_barra_elegida,
                                 "col_cant": col_cant_elegida
                             }, on_conflict="nombre").execute()
 
-                            supabase.table("productos_dinamicos").delete().eq("factura", nuevo_nom_factura.strip()).execute()
+                            supabase.table("productos_dinamicos").delete().eq("factura", nuevo_nom_factura.strip().upper()).execute()
 
                             batch_size = 100
                             for i in range(0, len(filas_a_insertar), batch_size):
