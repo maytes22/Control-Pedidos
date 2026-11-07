@@ -127,12 +127,42 @@ def get_supabase_client() -> Client:
 supabase = get_supabase_client()
 
 # --- FUNCIONES DE BASE DE DATOS (NUBE SUPABASE) ---
-def obtener_facturas():
+def obtener_facturas_con_progreso():
     try:
-        res = supabase.table("facturas").select("nombre").order("id", desc=True).execute()
-        return [row["nombre"] for row in res.data]
+        res_fac = supabase.table("facturas").select("nombre").order("id", desc=True).execute()
+        nombres = [row["nombre"] for row in res_fac.data]
+        if not nombres:
+            return [], {}
+
+        # Traer el estado de todos los productos para calcular el avance
+        res_prods = supabase.table("productos_dinamicos").select("factura, estado").execute()
+        stats = {nom: {"total": 0, "completados": 0, "pct": 0.0} for nom in nombres}
+
+        for p in res_prods.data:
+            fac = p.get("factura")
+            if fac in stats:
+                stats[fac]["total"] += 1
+                if p.get("estado") == "Completado":
+                    stats[fac]["completados"] += 1
+
+        for fac, d in stats.items():
+            tot = d["total"]
+            comp = d["completados"]
+            d["pct"] = (comp / tot) if tot > 0 else 0.0
+
+        # Ordenar: primero menor avance, al final las completadas (100%)
+        # Si ambas tienen el mismo %, se ordenan por nombre
+        nombres_ordenados = sorted(
+            nombres,
+            key=lambda x: (1 if stats[x]["pct"] >= 1.0 else 0, stats[x]["pct"], x.upper())
+        )
+        return nombres_ordenados, stats
     except Exception:
-        return []
+        return [], {}
+
+def obtener_facturas():
+    nombres, _ = obtener_facturas_con_progreso()
+    return nombres
 
 def obtener_info_factura(nombre_factura):
     try:
@@ -318,8 +348,30 @@ st.markdown("""
 
 with st.sidebar:
     st.header("📂 Factura en Trabajo")
-    facturas_lista = obtener_facturas()
-    factura_activa = st.selectbox("Seleccionar Factura Activa:", facturas_lista if facturas_lista else ["Sin facturas"])
+    facturas_lista, stats_facturas = obtener_facturas_con_progreso()
+    
+    def formatear_opcion_factura(nom):
+        if nom == "Sin facturas" or nom not in stats_facturas:
+            return nom
+        st_fac = stats_facturas[nom]
+        pct = st_fac["pct"]
+        tot = st_fac["total"]
+        comp = st_fac["completados"]
+        
+        # Barra gráfica compacta de progreso en texto para el selector
+        barra_ascii = "█" * int(round(pct * 6)) + "░" * (6 - int(round(pct * 6)))
+        if pct >= 1.0:
+            return f"✅ {nom.upper()} [{barra_ascii}] 100% (Listo)"
+        elif pct > 0:
+            return f"⏳ {nom.upper()} [{barra_ascii}] {pct*100:.1f}% ({comp}/{tot})"
+        else:
+            return f"⚪ {nom.upper()} [{barra_ascii}] 0% ({comp}/{tot})"
+
+    factura_activa = st.selectbox(
+        "Seleccionar Factura Activa:",
+        options=facturas_lista if facturas_lista else ["Sin facturas"],
+        format_func=formatear_opcion_factura
+    )
     
     # Detector de cambio de factura para limpiar el buscador automáticamente
     if "factura_previa" not in st.session_state:
@@ -331,6 +383,28 @@ with st.sidebar:
             st.session_state["input_scan"] = ""
         st.session_state.pop("mensaje_exito", None)
         st.rerun()
+
+    # Panel interactivo con barras de progreso reales de todas las facturas
+    if facturas_lista and stats_facturas:
+        with st.expander("📊 Monitor de Avance por Factura", expanded=True):
+            for fac in facturas_lista:
+                st_fac = stats_facturas[fac]
+                pct = st_fac["pct"]
+                comp = st_fac["completados"]
+                tot = st_fac["total"]
+                es_activa = "👉 " if fac == factura_activa else ""
+                
+                col_n, col_p = st.columns([3, 1.2])
+                with col_n:
+                    color_lbl = "#15803d" if pct >= 1.0 else ("#b45309" if pct > 0 else "#475569")
+                    icono = "✅" if pct >= 1.0 else ("⏳" if pct > 0 else "⚪")
+                    st.markdown(f"<span style='font-size: 12px; font-weight: 700; color: {color_lbl};'>{es_activa}{icono} {fac.upper()}</span>", unsafe_allow_html=True)
+                with col_p:
+                    st.markdown(f"<span style='font-size: 11px; font-weight: 800; color: #64748b;'>{pct*100:.1f}%</span>", unsafe_allow_html=True)
+                
+                st.progress(min(pct, 1.0))
+                st.caption(f"{comp} de {tot} ítems completados")
+                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
 
     if st.button("🔄 Refrescar datos", use_container_width=True):
         st.rerun()
@@ -867,3 +941,4 @@ with tab_subida:
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error al guardar en Supabase: {e}")
+
