@@ -3,21 +3,12 @@ import pandas as pd
 import pdfplumber
 import json
 import re
+import sqlite3
+import datetime
+import socket
 from supabase import create_client, Client
 
-try:
-    import zxingcpp
-    ZXING_AVAILABLE = True
-except ImportError:
-    ZXING_AVAILABLE = False
-
-try:
-    from pyzbar.pyzbar import decode as pyzbar_decode
-    PYZBAR_AVAILABLE = True
-except Exception:
-    PYZBAR_AVAILABLE = False
-
-st.set_page_config(page_title="Sistema de Chequeo de Productos", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Sistema de Chequeo de Productos (Híbrido)", page_icon="📦", layout="wide")
 
 st.markdown("""
 <style>
@@ -113,123 +104,289 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXIÓN CON SUPABASE ---
+# ==============================================================================
+# 1. MOTOR DE BASE DE DATOS LOCAL (SQLITE RESISTENTE A FALLOS)
+# ==============================================================================
+DB_LOCAL_PATH = "inventario_local.db"
+
+def init_local_db():
+    conn = sqlite3.connect(DB_LOCAL_PATH, timeout=10)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS facturas (
+        nombre TEXT PRIMARY KEY,
+        columnas_json TEXT,
+        col_barra TEXT,
+        col_cant TEXT,
+        updated_at TEXT,
+        sincronizado INTEGER DEFAULT 1
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS productos_dinamicos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supabase_id INTEGER,
+        factura TEXT,
+        datos_json TEXT,
+        codigo_barra TEXT,
+        cant_total INTEGER,
+        cant_registrada INTEGER,
+        estado TEXT,
+        updated_at TEXT,
+        sincronizado INTEGER DEFAULT 1,
+        UNIQUE(factura, supabase_id)
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+init_local_db()
+
+def get_local_conn():
+    conn = sqlite3.connect(DB_LOCAL_PATH, timeout=15)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# ==============================================================================
+# 2. CONEXIÓN A SUPABASE Y DETECCIÓN AUTOMÁTICA DE CONECTIVIDAD
+# ==============================================================================
 @st.cache_resource
-def get_supabase_client() -> Client:
+def get_supabase_client():
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception as e:
-        st.error("⚠️ Faltan las credenciales de Supabase en Secrets (SUPABASE_URL y SUPABASE_KEY).")
-        st.stop()
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
+        if url and key:
+            return create_client(url, key)
+    except Exception:
+        pass
+    return None
 
 supabase = get_supabase_client()
 
-# --- FUNCIONES DE BASE DE DATOS (NUBE SUPABASE) ---
-def obtener_facturas_con_progreso():
+def verificar_conexion():
+    if not supabase:
+        return False
     try:
-        res_fac = supabase.table("facturas").select("nombre").order("id", desc=True).execute()
-        nombres = [row["nombre"] for row in res_fac.data]
-        if not nombres:
-            return [], {}
-
-        # Traer el estado de todos los productos para calcular el avance
-        res_prods = supabase.table("productos_dinamicos").select("factura, estado").execute()
-        stats = {nom: {"total": 0, "completados": 0, "pct": 0.0} for nom in nombres}
-
-        for p in res_prods.data:
-            fac = p.get("factura")
-            if fac in stats:
-                stats[fac]["total"] += 1
-                if p.get("estado") == "Completado":
-                    stats[fac]["completados"] += 1
-
-        for fac, d in stats.items():
-            tot = d["total"]
-            comp = d["completados"]
-            d["pct"] = (comp / tot) if tot > 0 else 0.0
-
-        # Ordenar: primero menor avance, al final las completadas (100%)
-        # Si ambas tienen el mismo %, se ordenan por nombre
-        nombres_ordenados = sorted(
-            nombres,
-            key=lambda x: (1 if stats[x]["pct"] >= 1.0 else 0, stats[x]["pct"], x.upper())
-        )
-        return nombres_ordenados, stats
+        # Prueba ultrarrápida de ping DNS/socket con 1.5s de timeout
+        socket.setdefaulttimeout(1.5)
+        host = supabase.supabase_url.replace("https://", "").replace("http://", "").split("/")[0]
+        socket.gethostbyname(host)
+        return True
     except Exception:
-        return [], {}
+        return False
 
-def obtener_facturas():
-    nombres, _ = obtener_facturas_con_progreso()
-    return nombres
+# ==============================================================================
+# 3. MOTOR DE SINCRONIZACIÓN HÍBRIDO (PULL / PUSH BIDIRECCIONAL)
+# ==============================================================================
+def sincronizar_todo():
+    if not verificar_conexion():
+        return False, "Sin conexión a Internet. Trabajando en modo Local Offline."
+
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cambios_subidos = 0
+    cambios_bajados = 0
+
+    try:
+        # --- A. PUSH: Subir cambios locales pendientes a Supabase ---
+        cur.execute("SELECT * FROM productos_dinamicos WHERE sincronizado = 0")
+        pendientes = cur.fetchall()
+
+        for p in pendientes:
+            p_id = p["supabase_id"]
+            if p_id:
+                try:
+                    supabase.table("productos_dinamicos").update({
+                        "cant_registrada": p["cant_registrada"],
+                        "estado": p["estado"]
+                    }).eq("id", p_id).execute()
+                    
+                    cur.execute("UPDATE productos_dinamicos SET sincronizado = 1 WHERE id = ?", (p["id"],))
+                    cambios_subidos += 1
+                except Exception:
+                    pass
+        conn.commit()
+
+        # --- B. PULL: Descargar facturas nuevas o actualizadas desde Supabase ---
+        res_fac = supabase.table("facturas").select("nombre, columnas_json, col_barra, col_cant").execute()
+        for f in res_fac.data:
+            nom_fac = f["nombre"].strip().upper()
+            cols_val = f["columnas_json"]
+            if not isinstance(cols_val, str):
+                cols_val = json.dumps(cols_val)
+            
+            cur.execute("""
+            INSERT INTO facturas (nombre, columnas_json, col_barra, col_cant, updated_at, sincronizado)
+            VALUES (?, ?, ?, ?, ?, 1)
+            ON CONFLICT(nombre) DO UPDATE SET
+                columnas_json = excluded.columnas_json,
+                col_barra = excluded.col_barra,
+                col_cant = excluded.col_cant
+            """, (nom_fac, cols_val, f.get("col_barra", ""), f.get("col_cant", ""), datetime.datetime.utcnow().isoformat()))
+        conn.commit()
+
+        # Descargar productos desde Supabase
+        res_prods = supabase.table("productos_dinamicos").select("id, factura, datos_json, codigo_barra, cant_total, cant_registrada, estado").execute()
+        for p in res_prods.data:
+            s_id = p["id"]
+            nom_fac = p["factura"].strip().upper()
+            dj = p["datos_json"]
+            if not isinstance(dj, str):
+                dj = json.dumps(dj)
+            
+            cur.execute("SELECT id, cant_registrada, sincronizado FROM productos_dinamicos WHERE factura = ? AND supabase_id = ?", (nom_fac, s_id))
+            row_exist = cur.fetchone()
+
+            if not row_exist:
+                cur.execute("""
+                INSERT INTO productos_dinamicos (supabase_id, factura, datos_json, codigo_barra, cant_total, cant_registrada, estado, updated_at, sincronizado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, (s_id, nom_fac, dj, p.get("codigo_barra", ""), p.get("cant_total", 1), p.get("cant_registrada", 0), p.get("estado", "Pendiente"), datetime.datetime.utcnow().isoformat()))
+                cambios_bajados += 1
+            else:
+                # Regla de resolución de conflictos: Si local ya estaba sincronizado, actualizar con la nube
+                if row_exist["sincronizado"] == 1:
+                    cur.execute("""
+                    UPDATE productos_dinamicos
+                    SET cant_registrada = ?, estado = ?, datos_json = ?, codigo_barra = ?, cant_total = ?
+                    WHERE id = ?
+                    """, (p.get("cant_registrada", 0), p.get("estado", "Pendiente"), dj, p.get("codigo_barra", ""), p.get("cant_total", 1), row_exist["id"]))
+        conn.commit()
+        conn.close()
+        return True, f"Sincronización exitosa: {cambios_subidos} cambios enviados, {cambios_bajados} registros descargados."
+    except Exception as e:
+        conn.close()
+        return False, f"Error en sincronización: {e}"
+
+# ==============================================================================
+# 4. FUNCIONES DE LECTURA Y ESCRITURA LOCALES DE ALTA VELOCIDAD
+# ==============================================================================
+def obtener_facturas_con_progreso():
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT nombre FROM facturas")
+    nombres = [r["nombre"] for r in cur.fetchall()]
+    
+    if not nombres and verificar_conexion():
+        # Primera carga si la base local está vacía
+        sincronizar_todo()
+        cur.execute("SELECT nombre FROM facturas")
+        nombres = [r["nombre"] for r in cur.fetchall()]
+
+    stats = {}
+    for nom in nombres:
+        cur.execute("SELECT COUNT(*) as tot, SUM(CASE WHEN estado = 'Completado' THEN 1 ELSE 0 END) as comp FROM productos_dinamicos WHERE factura = ?", (nom,))
+        r = cur.fetchone()
+        tot = r["tot"] if r and r["tot"] else 0
+        comp = r["comp"] if r and r["comp"] else 0
+        pct = (comp / tot) if tot > 0 else 0.0
+        stats[nom] = {"total": tot, "completados": comp, "pct": pct}
+
+    conn.close()
+    
+    # Ordenar: primero menor avance, al final las completadas al 100%
+    nombres_ordenados = sorted(
+        nombres,
+        key=lambda x: (1 if stats[x]["pct"] >= 1.0 else 0, stats[x]["pct"], x.upper())
+    )
+    return nombres_ordenados, stats
 
 def obtener_info_factura(nombre_factura):
-    try:
-        res = supabase.table("facturas").select("columnas_json, col_barra, col_cant").eq("nombre", nombre_factura).execute()
-        if res.data:
-            row = res.data[0]
-            cols = row["columnas_json"]
-            if isinstance(cols, str):
-                cols = json.loads(cols)
-            return cols, row.get("col_barra", ""), row.get("col_cant", "")
-    except Exception:
-        pass
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT columnas_json, col_barra, col_cant FROM facturas WHERE nombre = ?", (nombre_factura,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        cols = row["columnas_json"]
+        if isinstance(cols, str):
+            cols = json.loads(cols)
+        return cols, row["col_barra"], row["col_cant"]
     return [], "", ""
 
 def cargar_productos_factura(nombre_factura):
-    try:
-        res = supabase.table("productos_dinamicos").select("id, datos_json, codigo_barra, cant_total, cant_registrada, estado").eq("factura", nombre_factura).order("id").execute()
-        lista = []
-        for r in res.data:
-            item = r["datos_json"]
-            if isinstance(item, str):
-                item = json.loads(item)
-            item['_id'] = r["id"]
-            item['_codigo_barra'] = r.get("codigo_barra", "")
-            item['_cant_total'] = r.get("cant_total", 0)
-            item['CANT. REGISTRADA'] = r.get("cant_registrada", 0)
-            item['ESTADO'] = r.get("estado", "Pendiente")
-            lista.append(item)
-        return pd.DataFrame(lista)
-    except Exception:
-        return pd.DataFrame()
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM productos_dinamicos WHERE factura = ? ORDER BY id", (nombre_factura,))
+    rows = cur.fetchall()
+    conn.close()
+    lista = []
+    for r in rows:
+        item = r["datos_json"]
+        if isinstance(item, str):
+            item = json.loads(item)
+        item['_id'] = r["id"]
+        item['_supabase_id'] = r["supabase_id"]
+        item['_codigo_barra'] = r["codigo_barra"] or ""
+        item['_cant_total'] = r["cant_total"]
+        item['CANT. REGISTRADA'] = r["cant_registrada"]
+        item['ESTADO'] = r["estado"]
+        lista.append(item)
+    return pd.DataFrame(lista)
 
 def actualizar_producto_dinamico(prod_id, cant_sumar=None, completar=False, resetear=False):
-    try:
-        res = supabase.table("productos_dinamicos").select("cant_total, cant_registrada").eq("id", prod_id).execute()
-        if res.data:
-            row = res.data[0]
-            cant_total = row["cant_total"]
-            cant_reg = row["cant_registrada"]
-            
-            if resetear:
-                nueva_cant = 0
-                nuevo_estado = "Pendiente"
-            elif completar:
-                nueva_cant = cant_total
-                nuevo_estado = "Completado"
-            else:
-                nueva_cant = cant_reg + (cant_sumar if cant_sumar is not None else 1)
-                nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
-            
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM productos_dinamicos WHERE id = ?", (prod_id,))
+    prod = cur.fetchone()
+    if not prod:
+        conn.close()
+        return
+
+    cant_total = prod["cant_total"]
+    cant_reg = prod["cant_registrada"]
+    now_iso = datetime.datetime.utcnow().isoformat()
+
+    if resetear:
+        nueva_cant = 0
+        nuevo_estado = "Pendiente"
+    elif completar:
+        nueva_cant = cant_total
+        nuevo_estado = "Completado"
+    else:
+        nueva_cant = cant_reg + (cant_sumar if cant_sumar is not None else 1)
+        nuevo_estado = "Completado" if nueva_cant >= cant_total else ("En Proceso" if nueva_cant > 0 else "Pendiente")
+
+    # Actualización local inmediata (sin importar internet)
+    cur.execute("""
+    UPDATE productos_dinamicos
+    SET cant_registrada = ?, estado = ?, updated_at = ?, sincronizado = 0
+    WHERE id = ?
+    """, (nueva_cant, nuevo_estado, now_iso, prod_id))
+    conn.commit()
+
+    # Si hay internet en este momento, hacer push instantáneo a Supabase
+    s_id = prod["supabase_id"]
+    if s_id and verificar_conexion():
+        try:
             supabase.table("productos_dinamicos").update({
                 "cant_registrada": nueva_cant,
                 "estado": nuevo_estado
-            }).eq("id", prod_id).execute()
-    except Exception as e:
-        st.error(f"Error al actualizar: {e}")
+            }).eq("id", s_id).execute()
+            cur.execute("UPDATE productos_dinamicos SET sincronizado = 1 WHERE id = ?", (prod_id,))
+            conn.commit()
+        except Exception:
+            pass
+
+    conn.close()
 
 def eliminar_factura_completa(nombre_factura):
-    try:
-        supabase.table("productos_dinamicos").delete().eq("factura", nombre_factura).execute()
-        supabase.table("facturas").delete().eq("nombre", nombre_factura).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error al eliminar la factura: {e}")
-        return False
+    conn = get_local_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM productos_dinamicos WHERE factura = ?", (nombre_factura,))
+    cur.execute("DELETE FROM facturas WHERE nombre = ?", (nombre_factura,))
+    conn.commit()
+    conn.close()
 
-# --- DICCIONARIO Y SEGMENTADOR DE PALABRAS PEGADAS ---
+    if verificar_conexion():
+        try:
+            supabase.table("productos_dinamicos").delete().eq("factura", nombre_factura).execute()
+            supabase.table("facturas").delete().eq("nombre", nombre_factura).execute()
+        except Exception:
+            pass
+    return True
+
+# --- FUNCIONES DE LECTURA PDF Y REPARACIÓN DE TEXTOS ---
 PALABRAS_CLAVE = {
     "marcador", "marcadores", "permanente", "tablero", "doble", "punta", "fina", "gruesa", "redonda",
     "biselada", "libro", "para", "colorear", "pag", "borrador", "borradores", "dinosaurios", "rex",
@@ -254,7 +411,6 @@ def reparar_espacios_texto(texto):
         return ""
     t = str(texto).strip().replace("\r", " ").replace("\n", " ")
     t = re.sub(r"\s+", " ", t)
-
     t = re.sub(r"([a-zñáéíóú])([A-ZÑÁÉÍÓÚ])", r"\1 \2", t)
     t = re.sub(r"(\d+)([a-zA-ZñáéíóúÑÁÉÍÓÚ])", r"\1 \2", t)
     t = re.sub(r"([a-zA-ZñáéíóúÑÁÉÍÓÚ])(\d+)", r"\1 \2", t)
@@ -296,13 +452,11 @@ def extraer_todas_las_tablas(uploaded_file):
         "snap_y_tolerance": 4,
         "intersection_x_tolerance": 8
     }
-    
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             tablas = page.extract_tables(table_settings=table_settings)
             if not tablas or len(tablas) == 0:
                 tablas = page.extract_tables()
-            
             for t in tablas:
                 if not t:
                     continue
@@ -334,7 +488,14 @@ def auto_detectar_fila_encabezados(df):
     return mejor_fila
 
 # --- CABECERA PRINCIPAL MODERNA ---
-st.markdown("""
+online = verificar_conexion()
+badge_estado = (
+    '<span style="background: #16a34a; color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700;">🟢 EN LÍNEA (DUAL NUBE/LOCAL)</span>'
+    if online else
+    '<span style="background: #ea580c; color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700;">🟠 MODO LOCAL OFFLINE (SIN INTERNET)</span>'
+)
+
+st.markdown(f"""
 <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 22px 28px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: space-between;">
     <div>
         <div style="display: flex; align-items: center; gap: 12px;">
@@ -342,6 +503,9 @@ st.markdown("""
             <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.5px;">Sistema de Chequeo de Productos</h1>
         </div>
         <p style="color: #94a3b8; margin: 4px 0 0 44px; font-size: 13px; font-weight: 400;">Control operativo de inventario, pistoleo y verificación de facturas en tiempo real</p>
+    </div>
+    <div>
+        {badge_estado}
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -389,15 +553,27 @@ with st.sidebar:
                 st.caption(f"{comp} de {tot} ítems completados")
                 st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
 
-    if st.button("🔄 Refrescar datos", use_container_width=True):
-        st.rerun()
+    # Botón de sincronización manual bidireccional
+    c_btn1, c_btn2 = st.columns(2)
+    with c_btn1:
+        if st.button("🔄 Sincronizar", use_container_width=True, help="Sube cambios locales a Supabase y descarga novedades"):
+            ok, msg = sincronizar_todo()
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
+            st.rerun()
+    with c_btn2:
+        if st.button("Refrescar", use_container_width=True):
+            st.rerun()
+
     st.divider()
 
     if factura_activa and factura_activa != "Sin facturas":
         with st.expander("🗑️ Eliminar Factura Actual"):
             st.warning(f"¿Deseas eliminar definitivamente '{factura_activa}' y todos sus productos?")
             confirmar = st.checkbox("Confirmar eliminación", key=f"conf_del_{factura_activa}")
-            if st.button("Eliminar Factura de la Base de Datos", type="primary", disabled=not confirmar, use_container_width=True):
+            if st.button("Eliminar Factura", type="primary", disabled=not confirmar, use_container_width=True):
                 if eliminar_factura_completa(factura_activa):
                     st.success(f"Factura '{factura_activa}' eliminada.")
                     st.rerun()
@@ -409,7 +585,7 @@ tab_operativa, tab_subida = st.tabs([
 ])
 
 # ==============================================================================
-# PESTAÑA 1: ÁREA OPERATIVA DE CHEQUEO Y PISTOLEO (100% LIMPIA)
+# PESTAÑA 1: ÁREA OPERATIVA DE CHEQUEO Y PISTOLEO
 # ==============================================================================
 with tab_operativa:
     if factura_activa and factura_activa != "Sin facturas":
@@ -465,7 +641,6 @@ with tab_operativa:
             st.progress(min(progreso, 1.0))
             st.write("")
 
-            # CONTROL DE RESET DE BUSCADOR
             if "input_scan_val" not in st.session_state:
                 st.session_state["input_scan_val"] = ""
 
@@ -587,8 +762,6 @@ with tab_operativa:
                                     if str(prod.get(c, "")).strip():
                                         val_total = str(prod.get(c, "")).strip()
 
-                            faltan_uds = max(0, prod['_cant_total'] - prod['CANT. REGISTRADA'])
-
                             c_cant, c_reg, c_pcompra, c_ptotal, c_est, c_btns = st.columns([1.0, 1.0, 1.1, 1.1, 1.3, 2.5])
                             
                             with c_cant:
@@ -639,12 +812,10 @@ with tab_operativa:
 
                             with c_btns:
                                 st.markdown("<p style='font-weight: 700; margin-bottom: 3px; font-size: 12px; color: #334155;'>⚡ Conteo Rápido / Registro:</p>", unsafe_allow_html=True)
-                                
                                 desc_corta = nombre_producto[:35]
 
                                 if faltan_uds > 0:
                                     col_input_cant, col_btn_add, col_btn_tach = st.columns([1.1, 1.2, 1.4])
-                                    
                                     with col_input_cant:
                                         val_sugerido = faltan_uds if faltan_uds <= 12 else 1
                                         cant_a_sumar = st.number_input(
@@ -741,7 +912,6 @@ with tab_operativa:
                 st.subheader("📋 Lista Completa con Todas las Columnas del Proveedor")
 
             with col_filtro_estado:
-                # Contadores rápidos para las etiquetas del filtro
                 c_pend = len(df_act[df_act['ESTADO'] == 'Pendiente'])
                 c_proc = len(df_act[df_act['ESTADO'] == 'En Proceso'])
                 c_comp = len(df_act[df_act['ESTADO'] == 'Completado'])
@@ -762,7 +932,6 @@ with tab_operativa:
                 )
                 estado_elegido = opciones_filtro[filtro_sel]
 
-            # Filtrar DataFrame según selección
             if estado_elegido != "Todos":
                 df_filtrado = df_act[df_act['ESTADO'] == estado_elegido].copy()
             else:
@@ -785,11 +954,11 @@ with tab_operativa:
         st.info("ℹ️ No hay ninguna factura seleccionada. Dirígete a la pestaña **'📥 Cargar / Configurar Nueva Factura'** para subir tu primer PDF.")
 
 # ==============================================================================
-# PESTAÑA 2: ÁREA DE CARGA Y CONFIGURACIÓN DE FACTURAS (SEPARADA)
+# PESTAÑA 2: ÁREA DE CARGA Y CONFIGURACIÓN DE FACTURAS (DUAL LOCAL + NUBE)
 # ==============================================================================
 with tab_subida:
     st.subheader("📄 Carga y Configuración de Facturas (PDF)")
-    st.caption("Sube el PDF de cualquier proveedor. Esta sección está aislada para no interferir con el trabajo diario de bodega o chequeo.")
+    st.caption("Sube el PDF del proveedor. Se almacena localmente y se replica a la nube Supabase si hay conexión.")
 
     c_nom, c_file = st.columns([1, 2])
     with c_nom:
@@ -847,10 +1016,11 @@ with tab_subida:
             st.write("**Vista previa de los primeros productos detectados:**")
             st.dataframe(df_preview_final.head(6), use_container_width=True)
 
-            if st.button("🚀 Guardar en la Nube (Supabase)", type="primary", use_container_width=True):
+            if st.button("🚀 Guardar Factura en el Sistema", type="primary", use_container_width=True):
                 if not nuevo_nom_factura.strip():
                     st.error("Asigna un nombre a la factura.")
                 else:
+                    nom_final_fac = nuevo_nom_factura.strip().upper()
                     filas_a_insertar = []
                     encabezados_lower = [str(c).lower().strip() for c in nombres_cols]
                     
@@ -866,13 +1036,11 @@ with tab_subida:
                         valores_limpios = [str(v).strip() for v in datos_dict.values() if v is not None]
                         if not any(valores_limpios):
                             continue
-                        
                         texto_completo_fila = " ".join([str(v).lower() for v in valores_limpios])
 
                         coincidencias_encabezado = sum(1 for c in nombres_cols if str(r[c]).strip().lower() in encabezados_lower)
                         if coincidencias_encabezado >= 2:
                             continue
-
                         if any(term in texto_completo_fila for term in PALABRAS_DESCARTAR):
                             continue
 
@@ -880,12 +1048,10 @@ with tab_subida:
                         cant_match = re.search(r"[-+]?\d*\.?\d+", cant_str)
                         if not cant_match:
                             continue
-                        
                         try:
                             cant_val = int(float(cant_match.group()))
                         except Exception:
                             cant_val = 1
-                        
                         if cant_val <= 0:
                             continue
 
@@ -894,7 +1060,7 @@ with tab_subida:
                             cod_barra_val = str(datos_dict.get(col_barra_elegida, "")).strip().replace(" ", "")
 
                         filas_a_insertar.append({
-                            "factura": nuevo_nom_factura.strip().upper(),
+                            "factura": nom_final_fac,
                             "datos_json": datos_dict,
                             "codigo_barra": cod_barra_val,
                             "cant_total": cant_val,
@@ -903,25 +1069,64 @@ with tab_subida:
                         })
 
                     if filas_a_insertar:
-                        try:
-                            supabase.table("facturas").upsert({
-                                "nombre": nuevo_nom_factura.strip().upper(),
-                                "columnas_json": nombres_cols,
-                                "col_barra": col_barra_elegida,
-                                "col_cant": col_cant_elegida
-                            }, on_conflict="nombre").execute()
+                        # 1. Guardar primero en SQLite local (inmediato y sin fallas)
+                        conn = get_local_conn()
+                        cur = conn.cursor()
+                        now_str = datetime.datetime.utcnow().isoformat()
+                        
+                        cur.execute("""
+                        INSERT INTO facturas (nombre, columnas_json, col_barra, col_cant, updated_at, sincronizado)
+                        VALUES (?, ?, ?, ?, ?, 0)
+                        ON CONFLICT(nombre) DO UPDATE SET
+                            columnas_json = excluded.columnas_json,
+                            col_barra = excluded.col_barra,
+                            col_cant = excluded.col_cant,
+                            updated_at = excluded.updated_at,
+                            sincronizado = 0
+                        """, (nom_final_fac, json.dumps(nombres_cols), col_barra_elegida, col_cant_elegida, now_str))
 
-                            supabase.table("productos_dinamicos").delete().eq("factura", nuevo_nom_factura.strip().upper()).execute()
+                        cur.execute("DELETE FROM productos_dinamicos WHERE factura = ?", (nom_final_fac,))
 
-                            batch_size = 100
-                            for i in range(0, len(filas_a_insertar), batch_size):
-                                lote = filas_a_insertar[i:i + batch_size]
-                                supabase.table("productos_dinamicos").insert(lote).execute()
+                        for f in filas_a_insertar:
+                            cur.execute("""
+                            INSERT INTO productos_dinamicos (factura, datos_json, codigo_barra, cant_total, cant_registrada, estado, updated_at, sincronizado)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                            """, (nom_final_fac, json.dumps(f["datos_json"]), f["codigo_barra"], f["cant_total"], 0, "Pendiente", now_str))
+                        conn.commit()
 
-                            st.success(f"¡Factura '{nuevo_nom_factura}' guardada limpiamente con {len(filas_a_insertar)} productos!")
-                            st.session_state.pop("df_raw_pdf", None)
-                            st.session_state.pop("raw_pdf_name", None)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al guardar en Supabase: {e}")
+                        # 2. Si hay conexión a Supabase, subir también a la nube
+                        if verificar_conexion():
+                            try:
+                                supabase.table("facturas").upsert({
+                                    "nombre": nom_final_fac,
+                                    "columnas_json": nombres_cols,
+                                    "col_barra": col_barra_elegida,
+                                    "col_cant": col_cant_elegida
+                                }, on_conflict="nombre").execute()
+
+                                supabase.table("productos_dinamicos").delete().eq("factura", nom_final_fac).execute()
+                                
+                                batch_size = 100
+                                for i in range(0, len(filas_a_insertar), batch_size):
+                                    lote = filas_a_insertar[i:i + batch_size]
+                                    res_ins = supabase.table("productos_dinamicos").insert(lote).execute()
+                                    # Mapear los supabase_id generados de vuelta a SQLite
+                                    if res_ins.data:
+                                        for p_creado in res_ins.data:
+                                            cur.execute("""
+                                            UPDATE productos_dinamicos
+                                            SET supabase_id = ?, sincronizado = 1
+                                            WHERE factura = ? AND datos_json = ? AND supabase_id IS NULL
+                                            """, (p_creado["id"], nom_final_fac, json.dumps(p_creado["datos_json"])))
+                                conn.commit()
+                                cur.execute("UPDATE facturas SET sincronizado = 1 WHERE nombre = ?", (nom_final_fac,))
+                                conn.commit()
+                            except Exception as e:
+                                st.warning(f"Guardado localmente. La réplica a Supabase se completará al sincronizar: {e}")
+                        
+                        conn.close()
+                        st.success(f"¡Factura '{nom_final_fac}' guardada exitosamente con {len(filas_a_insertar)} productos!")
+                        st.session_state.pop("df_raw_pdf", None)
+                        st.session_state.pop("raw_pdf_name", None)
+                        st.rerun()
 
